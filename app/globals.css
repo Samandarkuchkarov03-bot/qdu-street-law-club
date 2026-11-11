@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { scroll-behavior: smooth; overflow-x: clip; }
+  body { @apply overflow-x-clip bg-navy-950 font-sans text-slate-300 antialiased; }
+  h1, h2, h3, p, li, a, button, label, dd, dt { overflow-wrap: break-word; }
+  h1, h2, h3 { @apply font-serif text-white; }
+  img, video { @apply max-w-full; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-gold-400; }
+}
+@layer components {
+  .container-x { @apply mx-auto w-full max-w-6xl px-5 sm:px-8; }
+  .btn { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-semibold transition duration-300 hover:-translate-y-0.5; }
+  .btn-gold { @apply btn bg-gold-500 text-navy-950 hover:bg-gold-400 hover:shadow-lg hover:shadow-gold-500/30; }
+  .btn-ghost { @apply btn border border-white/20 text-white hover:border-gold-400 hover:text-gold-300; }
+  .card { @apply min-w-0 rounded-2xl border border-white/10 bg-navy-800/60 transition duration-300 hover:-translate-y-1 hover:border-gold-500/50 hover:shadow-xl hover:shadow-black/30; }
+  .input { @apply w-full max-w-full rounded-xl border border-white/15 bg-navy-900 px-4 py-3 text-base text-white placeholder:text-slate-500 focus:border-gold-400 focus:outline-none; }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-[0.2em] text-gold-400; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; } }
