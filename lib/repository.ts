@@ -171,8 +171,42 @@ export async function getGallery(): Promise<GalleryItem[]> {
   return (data ?? []).map((row) => mapGallery(row as Row));
 }
 
+function mapQuizRow(record: Row, questions: Row[]): Quiz {
+  return {
+    id: text(record.id),
+    title: text(record.title),
+    description: text(record.description),
+    category: text(record.category),
+    questions: questions.map((question) => {
+      const options = [...((question.options as Row[] | undefined) ?? (question.test_options as Row[] | undefined) ?? [])].sort((a, b) =>
+        text(a.id).localeCompare(text(b.id)),
+      );
+      return {
+        id: text(question.id),
+        q: text(question.question),
+        options: options.map((option) => ({ id: text(option.id), text: text(option.option_text) })),
+      };
+    }),
+  };
+}
+
+function missingQuizFunction(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === "PGRST202" || /could not find the function|schema cache/i.test(error.message ?? "");
+}
+
 export async function getQuizzes(): Promise<Quiz[]> {
   const supabase = createServerSupabase();
+  const published = await supabase.rpc("published_quizzes");
+  if (!published.error) {
+    const rows = Array.isArray(published.data) ? (published.data as Row[]) : [];
+    return rows.map((row) => {
+      const questions = [...((row.questions as Row[] | undefined) ?? [])].sort((a, b) => text(a.created_at).localeCompare(text(b.created_at)));
+      return mapQuizRow(row, questions);
+    });
+  }
+  if (!missingQuizFunction(published.error)) fail(published.error, "Testlarni yuklab bo'lmadi.");
+
   const { data, error } = await supabase
     .from("tests")
     .select("id,title,description,category,is_published,created_at,test_questions(id,question,created_at,test_options(id,option_text))")
@@ -183,19 +217,6 @@ export async function getQuizzes(): Promise<Quiz[]> {
   return (data ?? []).map((row) => {
     const record = row as Row & { test_questions?: Row[] };
     const questions = [...(record.test_questions ?? [])].sort((a, b) => text(a.created_at).localeCompare(text(b.created_at)));
-    return {
-      id: text(record.id),
-      title: text(record.title),
-      description: text(record.description),
-      category: text(record.category),
-      questions: questions.map((question) => {
-        const options = [...((question.test_options as Row[] | undefined) ?? [])].sort((a, b) => text(a.id).localeCompare(text(b.id)));
-        return {
-          id: text(question.id),
-          q: text(question.question),
-          options: options.map((option) => ({ id: text(option.id), text: text(option.option_text) })),
-        };
-      }),
-    };
+    return mapQuizRow(record, questions);
   });
 }

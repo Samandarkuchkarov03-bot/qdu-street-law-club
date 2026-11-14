@@ -254,6 +254,150 @@ for delete
 to anon, authenticated
 using (public.is_admin());
 
+alter table public.test_questions enable row level security;
+alter table public.test_options enable row level security;
+
+do $$
+declare
+  policy_row record;
+begin
+  for policy_row in
+    select policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'test_questions'
+      and upper(permissive::text) in ('RESTRICTIVE', 'FALSE')
+      and upper(cmd) in ('SELECT', 'ALL')
+  loop
+    execute format('drop policy %I on public.test_questions', policy_row.policyname);
+  end loop;
+
+  for policy_row in
+    select policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'test_options'
+      and upper(permissive::text) in ('RESTRICTIVE', 'FALSE')
+      and upper(cmd) in ('SELECT', 'ALL')
+      and (
+        roles::text ilike '%anon%'
+        or roles::text ilike '%public%'
+      )
+  loop
+    execute format('drop policy %I on public.test_options', policy_row.policyname);
+  end loop;
+end $$;
+
+grant select on table public.test_questions to anon, authenticated;
+
+drop policy if exists "public read published questions" on public.test_questions;
+create policy "public read published questions"
+on public.test_questions
+for select
+to anon, authenticated
+using (
+  public.is_admin()
+  or exists (
+    select 1
+    from public.tests
+    where id = test_questions.test_id
+      and is_published is true
+  )
+);
+
+drop policy if exists "question inserts require admin" on public.test_questions;
+create policy "question inserts require admin"
+on public.test_questions
+as restrictive
+for insert
+to anon, authenticated
+with check (public.is_admin());
+
+drop policy if exists "question updates require admin" on public.test_questions;
+create policy "question updates require admin"
+on public.test_questions
+as restrictive
+for update
+to anon, authenticated
+using (public.is_admin())
+with check (public.is_admin());
+
+drop policy if exists "question deletes require admin" on public.test_questions;
+create policy "question deletes require admin"
+on public.test_questions
+as restrictive
+for delete
+to anon, authenticated
+using (public.is_admin());
+
+drop policy if exists "public read published options" on public.test_options;
+create policy "public read published options"
+on public.test_options
+for select
+to anon
+using (
+  exists (
+    select 1
+    from public.test_questions
+    join public.tests on tests.id = test_questions.test_id
+    where test_questions.id = test_options.question_id
+      and tests.is_published is true
+  )
+);
+
+create or replace function public.published_quizzes()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(jsonb_agg(quiz order by created_at desc), '[]'::jsonb)
+  from (
+    select
+      t.created_at,
+      jsonb_build_object(
+        'id', t.id,
+        'title', t.title,
+        'description', t.description,
+        'category', t.category,
+        'created_at', t.created_at,
+        'questions', coalesce((
+          select jsonb_agg(
+            jsonb_build_object(
+              'id', q.id,
+              'question', q.question,
+              'created_at', q.created_at,
+              'options', coalesce((
+                select jsonb_agg(
+                  jsonb_build_object('id', o.id, 'option_text', o.option_text)
+                  order by o.id
+                )
+                from public.test_options o
+                where o.question_id = q.id
+              ), '[]'::jsonb)
+            )
+            order by q.created_at, q.id
+          )
+          from public.test_questions q
+          where q.test_id = t.id
+        ), '[]'::jsonb)
+      ) as quiz
+    from public.tests t
+    where t.is_published is true
+  ) published;
+$$;
+
+revoke all on function public.published_quizzes() from public;
+grant execute on function public.published_quizzes() to anon, authenticated;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.published_quizzes() to service_role;
+  end if;
+end $$;
+
 do $$
 declare
   policy_row record;

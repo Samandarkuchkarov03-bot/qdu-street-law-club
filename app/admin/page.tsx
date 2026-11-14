@@ -1675,7 +1675,7 @@ function TestsSection() {
       return;
     }
     const optionsResult = await supabase.from("test_options").select("id,question_id,option_text,is_correct").in("question_id", ids).order("id", { ascending: true });
-    if (optionsResult.error) setError(errorText(optionsResult.error, "Javob variantlarini o'chirib bo'lmadi."));
+    if (optionsResult.error) setError(errorText(optionsResult.error, "Javob variantlari yuklanmadi."));
     else setOptions(rowsOf<OptionRow>(optionsResult.data));
     setQuestionsLoading(false);
   }, []);
