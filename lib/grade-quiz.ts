@@ -2,8 +2,10 @@
 
 import { createServerSupabase } from "@/lib/supabase-server";
 
+export type QuizAnswerResult = { questionId: string; correct: boolean };
+
 export type GradeResult =
-  | { ok: true; score: number; total: number; correctOptionIds: string[] }
+  | { ok: true; score: number; total: number; results: QuizAnswerResult[] }
   | { ok: false; error: string };
 
 type Answer = { questionId: string; optionId: string };
@@ -15,13 +17,22 @@ function missingFunction(error: { code?: string; message?: string } | null): boo
   return error.code === "PGRST202" || /could not find the function/i.test(error.message ?? "");
 }
 
+function readResults(value: unknown): QuizAnswerResult[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as { questionId?: unknown; correct?: unknown };
+    if (typeof row.questionId !== "string" || typeof row.correct !== "boolean") return [];
+    return [{ questionId: row.questionId, correct: row.correct }];
+  });
+}
+
 function asGrade(value: unknown): GradeResult | null {
   if (!value || typeof value !== "object") return null;
-  const row = value as { ok?: unknown; score?: unknown; total?: unknown; correctOptionIds?: unknown; error?: unknown };
+  const row = value as { ok?: unknown; score?: unknown; total?: unknown; results?: unknown; error?: unknown };
   if (row.ok === false) return { ok: false, error: typeof row.error === "string" ? row.error : "Testni baholab bo'lmadi." };
-  if (row.ok !== true || typeof row.score !== "number" || typeof row.total !== "number" || !Array.isArray(row.correctOptionIds)) return null;
-  const correctOptionIds = row.correctOptionIds.filter((id): id is string => typeof id === "string");
-  return { ok: true, score: row.score, total: row.total, correctOptionIds };
+  if (row.ok !== true || typeof row.score !== "number" || typeof row.total !== "number") return null;
+  return { ok: true, score: row.score, total: row.total, results: readResults(row.results) };
 }
 
 async function gradeFromTable(testId: string, answers: Answer[]): Promise<GradeResult> {
@@ -33,11 +44,16 @@ async function gradeFromTable(testId: string, answers: Answer[]): Promise<GradeR
   if (questionsError) return { ok: false, error: "Savollarni tekshirib bo'lmadi." };
   const questionIds = (questions ?? []).map((question) => question.id as string);
   if (questionIds.length === 0) return { ok: false, error: "Bu testda savol yo'q." };
+  if (answers.length !== questionIds.length) return { ok: false, error: "Barcha savollarga javob bering." };
 
   const picked = new Map<string, string>();
+  const seenOptions = new Set<string>();
   for (const answer of answers) {
     if (!questionIds.includes(answer.questionId)) return { ok: false, error: "Savol bu testga tegishli emas." };
+    if (picked.has(answer.questionId)) return { ok: false, error: "Bir savolga faqat bitta javob yuboring." };
+    if (seenOptions.has(answer.optionId)) return { ok: false, error: "Bir variantni qayta yuborib bo'lmaydi." };
     picked.set(answer.questionId, answer.optionId);
+    seenOptions.add(answer.optionId);
   }
   if (questionIds.some((id) => !picked.has(id))) return { ok: false, error: "Barcha savollarga javob bering." };
 
@@ -62,16 +78,16 @@ async function gradeFromTable(testId: string, answers: Answer[]): Promise<GradeR
   }
 
   let score = 0;
-  const correctOptionIds: string[] = [];
+  const results: QuizAnswerResult[] = [];
   for (const questionId of questionIds) {
-    const correct = correctByQuestion.get(questionId) ?? [];
-    correctOptionIds.push(...correct);
     const choice = picked.get(questionId);
     if (!choice || optionQuestion.get(choice) !== questionId) return { ok: false, error: "Tanlangan variant topilmadi." };
-    if (correct.includes(choice)) score += 1;
+    const correct = (correctByQuestion.get(questionId) ?? []).includes(choice);
+    if (correct) score += 1;
+    results.push({ questionId, correct });
   }
 
-  return { ok: true, score, total: questionIds.length, correctOptionIds };
+  return { ok: true, score, total: questionIds.length, results };
 }
 
 export async function gradeQuiz(testId: string, answers: Answer[]): Promise<GradeResult> {
@@ -80,6 +96,14 @@ export async function gradeQuiz(testId: string, answers: Answer[]): Promise<Grad
   }
   if (answers.some((answer) => !answer || !UUID.test(answer.questionId) || !UUID.test(answer.optionId))) {
     return { ok: false, error: "Javob identifikatori noto'g'ri." };
+  }
+  const questionIds = new Set<string>();
+  const optionIds = new Set<string>();
+  for (const answer of answers) {
+    if (questionIds.has(answer.questionId)) return { ok: false, error: "Bir savolga faqat bitta javob yuboring." };
+    if (optionIds.has(answer.optionId)) return { ok: false, error: "Bir variantni qayta yuborib bo'lmaydi." };
+    questionIds.add(answer.questionId);
+    optionIds.add(answer.optionId);
   }
 
   const supabase = createServerSupabase();

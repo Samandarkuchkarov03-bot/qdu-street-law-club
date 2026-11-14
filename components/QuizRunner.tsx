@@ -11,7 +11,7 @@ export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
   const [index, setIndex] = useState(0);
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [score, setScore] = useState<number | null>(null);
-  const [correctIds, setCorrectIds] = useState<string[]>([]);
+  const [results, setResults] = useState<Record<string, boolean>>({});
   const [error, setError] = useState("");
   const [grading, setGrading] = useState(false);
 
@@ -23,7 +23,7 @@ export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
     setIndex(0);
     setPicks({});
     setScore(null);
-    setCorrectIds([]);
+    setResults({});
     setError("");
   }
 
@@ -32,7 +32,7 @@ export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
     setIndex(0);
     setPicks({});
     setScore(null);
-    setCorrectIds([]);
+    setResults({});
     setError("");
   }
 
@@ -95,13 +95,13 @@ export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
             <ul className="mt-4 space-y-2">
               {question.options.map((option) => {
                 const picked = picks[question.id] === option.id;
-                const correct = correctIds.includes(option.id);
-                const tone = correct ? "border-emerald-400 bg-emerald-400/10" : picked ? "border-red-400 bg-red-400/10" : "border-white/10";
+                const verdict = results[question.id];
+                const tone = picked && verdict === true ? "border-emerald-400 bg-emerald-400/10" : picked && verdict === false ? "border-red-400 bg-red-400/10" : "border-white/10";
                 return (
                   <li key={option.id} className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${tone}`}>
                     <span>{option.text}</span>
-                    {correct ? <CheckCircle2 size={18} aria-label="To'g'ri javob" className="shrink-0 text-emerald-400" /> : null}
-                    {picked && !correct ? <XCircle size={18} aria-label="Sizning javobingiz" className="shrink-0 text-red-400" /> : null}
+                    {picked && verdict === true ? <CheckCircle2 size={18} aria-label="To'g'ri javob" className="shrink-0 text-emerald-400" /> : null}
+                    {picked && verdict === false ? <XCircle size={18} aria-label="Noto'g'ri javob" className="shrink-0 text-red-400" /> : null}
                   </li>
                 );
               })}
@@ -125,7 +125,7 @@ export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
       return;
     }
     setScore(result.score);
-    setCorrectIds(result.correctOptionIds);
+    setResults(Object.fromEntries(result.results.map((item) => [item.questionId, item.correct])));
   }
 
   return (
