@@ -45,7 +45,7 @@ export default function AdminLoginPage() {
     const { error } = await supabase.auth.resetPasswordForEmail(
       email.trim(),
       {
-        redirectTo: `${window.location.origin}/update-password`,
+        redirectTo: "https://qdu-street-law-club-8buc.vercel.app/auth/callback",
       }
     );
 
