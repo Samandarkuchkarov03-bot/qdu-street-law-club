@@ -17,6 +17,7 @@
   .btn-ghost { @apply btn border border-white/20 text-white hover:border-gold-400 hover:text-gold-300; }
   .card { @apply min-w-0 rounded-2xl border border-white/10 bg-navy-800/60 transition duration-300 hover:-translate-y-1 hover:border-gold-500/50 hover:shadow-xl hover:shadow-black/30; }
   .input { @apply w-full max-w-full rounded-xl border border-white/15 bg-navy-900 px-4 py-3 text-base text-white placeholder:text-slate-500 focus:border-gold-400 focus:outline-none; }
+  select.input option { background-color: #0a1330; color: #fff; }
   .eyebrow { @apply text-xs font-semibold uppercase tracking-[0.2em] text-gold-400; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; } }

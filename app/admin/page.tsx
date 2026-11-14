@@ -101,8 +101,6 @@ type OptionRow = {
 
 type ApplicationFilter = "all" | "pending" | "approved" | "rejected";
 
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
-
 const fieldClass =
   "w-full rounded-xl border border-white/15 bg-navy-950 px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-gold-400";
 const labelClass = "mb-1.5 block text-sm font-medium text-white";
@@ -135,11 +133,19 @@ function emptyToNull(value: string): string | null {
 }
 
 function errorText(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message) return message;
-  }
+  const record = error && typeof error === "object" ? (error as { message?: unknown; code?: unknown }) : null;
+  const raw = error instanceof Error ? error.message : typeof record?.message === "string" ? record.message : "";
+  const code = typeof record?.code === "string" ? record.code : "";
+  if (code === "42501" || /row-level security|permission denied/i.test(raw)) return "Bu amal uchun ruxsat yo'q. Admin sessiyasini tekshiring.";
+  if (code === "23505") return "Bu yozuv allaqachon mavjud.";
+  if (code === "23502" || code === "23514") return "Ma'lumotlar bazasi qoidasiga mos kelmadi. Maydonlarni tekshiring.";
+  if (code === "PGRST205") return "Sozlamalar jadvali hali yo'q. SQL migratsiyasini ishga tushiring.";
+  if (/jwt|expired|invalid claim/i.test(raw)) return "Sessiya tugagan. Qayta kiring.";
+  if (/payload too large|entity too large/i.test(raw)) return "Fayl hajmi ruxsat etilganidan katta.";
+  if (/network|failed to fetch/i.test(raw)) return "Tarmoq xatosi. Qayta urinib ko'ring.";
+  if (/bucket not found/i.test(raw)) return "street-law-media ombori topilmadi.";
+  if (/already exists|duplicate/i.test(raw)) return "Bu fayl allaqachon yuklangan.";
+  if (raw && !/^[\x00-\x7F]+$/.test(raw)) return raw;
   return fallback;
 }
 
@@ -187,6 +193,34 @@ function statusLabel(status: string | null): string {
 }
 
 const MEDIA_BUCKET = "street-law-media";
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/ogg", "video/quicktime"]);
+
+function storagePath(url: string | null): string | null {
+  if (!url) return null;
+  const marker = `/storage/v1/object/public/${MEDIA_BUCKET}/`;
+  const index = url.indexOf(marker);
+  if (index < 0) return null;
+  return decodeURIComponent(url.slice(index + marker.length).split("?")[0]);
+}
+
+async function removeStoredFile(url: string | null): Promise<boolean> {
+  const path = storagePath(url);
+  if (!path) return true;
+  const { error } = await supabase.storage.from(MEDIA_BUCKET).remove([path]);
+  return !error;
+}
+
+function assertMediaFile(file: File, allowVideo: boolean) {
+  const image = IMAGE_TYPES.has(file.type);
+  const video = allowVideo && VIDEO_TYPES.has(file.type);
+  if (!image && !video) {
+    throw new Error(allowVideo ? "Faqat JPG, PNG, WEBP, GIF rasm yoki MP4, WEBM video yuklang." : "Faqat JPG, PNG, WEBP yoki GIF rasm yuklang.");
+  }
+  if (file.size <= 0) throw new Error("Fayl bo'sh.");
+  const max = video ? 50 * 1024 * 1024 : 8 * 1024 * 1024;
+  if (file.size > max) throw new Error(video ? "Video 50 MB dan katta bo'lmasin." : "Rasm 8 MB dan katta bo'lmasin.");
+}
 
 async function resolveBucket(): Promise<string> {
   const { data, error } = await supabase.storage.listBuckets();
@@ -201,10 +235,8 @@ async function resolveBucket(): Promise<string> {
   return named.name || MEDIA_BUCKET;
 }
 
-async function uploadToBucket(file: File, folder: string): Promise<string> {
-  if (file.size > MAX_MEDIA_BYTES) {
-    throw new Error("Fayl 50 MB dan katta bo'lmasligi kerak.");
-  }
+async function uploadToBucket(file: File, folder: string, allowVideo: boolean): Promise<string> {
+  assertMediaFile(file, allowVideo);
   const bucket = await resolveBucket();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
@@ -213,7 +245,7 @@ async function uploadToBucket(file: File, folder: string): Promise<string> {
     upsert: false,
     contentType: file.type || "application/octet-stream",
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(errorText(error, "Fayl yuklanmadi."));
   const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   if (!data.publicUrl) throw new Error("Yuklangan fayl manzili olinmadi.");
   return data.publicUrl;
@@ -255,8 +287,8 @@ function useMediaPicker() {
   return { file, preview, clearImage, remoteUrl, setRemoteUrl, pick, reset, markClear };
 }
 
-async function chosenImage(media: { file: File | null; clearImage: boolean; remoteUrl: string }, folder: string, current: string | null): Promise<string | null> {
-  if (media.file) return uploadToBucket(media.file, folder);
+async function chosenImage(media: { file: File | null; clearImage: boolean; remoteUrl: string }, folder: string, current: string | null, allowVideo: boolean): Promise<string | null> {
+  if (media.file) return uploadToBucket(media.file, folder, allowVideo);
   if (media.clearImage) return null;
   const remote = media.remoteUrl.trim();
   if (remote) {
@@ -264,6 +296,40 @@ async function chosenImage(media: { file: File | null; clearImage: boolean; remo
     return remote;
   }
   return current;
+}
+
+function askConfirm(message: string): Promise<boolean> {
+  if (!confirmOpener) return Promise.resolve(window.confirm(message));
+  return confirmOpener(message);
+}
+
+let confirmOpener: ((message: string) => Promise<boolean>) | null = null;
+
+function ConfirmHost() {
+  const [request, setRequest] = useState<{ message: string; resolve: (value: boolean) => void } | null>(null);
+  useEffect(() => {
+    confirmOpener = (message) => new Promise((resolve) => setRequest({ message, resolve }));
+    return () => {
+      confirmOpener = null;
+    };
+  }, []);
+  if (!request) return null;
+  function close(value: boolean) {
+    request?.resolve(value);
+    setRequest(null);
+  }
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 p-4 sm:items-center">
+      <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" className="w-full max-w-md rounded-2xl border border-white/10 bg-navy-900 p-5 shadow-2xl">
+        <h3 id="confirm-title" className="font-serif text-2xl text-white">Tasdiqlang</h3>
+        <p className="mt-3 text-sm leading-6 text-slate-300">{request.message}</p>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => close(false)} className={ghostBtn}>Bekor qilish</button>
+          <button type="button" onClick={() => close(true)} className={dangerBtn}>Ha, o'chirish</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Alerts({ error, success }: { error: string; success: string }) {
@@ -306,19 +372,26 @@ function PublishBadge({ published }: { published: boolean }) {
 }
 
 function MediaPreview({ url, alt, className, video }: { url: string; alt: string; className?: string; video?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className={`${className ?? ""} grid place-items-center bg-navy-950 text-xs text-slate-500`}>Media ochilmadi</div>;
   if (video || isVideoUrl(url)) {
-    return <video src={url} controls className={className} />;
+    return <video src={url} controls className={className} onError={() => setFailed(true)} />;
   }
-  return <img src={url} alt={alt} className={className} />;
+  return <img src={url} alt={alt} className={className} onError={() => setFailed(true)} />;
 }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [onClose]);
 
   return (
@@ -421,37 +494,53 @@ function PublishField({ checked, onChange, label = "Nashrga chiqarish" }: { chec
 }
 
 function DashboardSection({ onOpen }: { onOpen: (id: SectionId) => void }) {
-  const [counts, setCounts] = useState<{ label: string; value: number; id: SectionId }[]>([]);
-  const [pending, setPending] = useState(0);
+  const [counts, setCounts] = useState<{ label: string; value: number; detail: string; id: SectionId }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const specs: { table: string; label: string; id: SectionId }[] = [
+    const content: { table: string; label: string; id: SectionId }[] = [
       { table: "team", label: "Jamoa", id: "team" },
-      { table: "membership_applications", label: "Arizalar", id: "applications" },
       { table: "events", label: "Tadbirlar", id: "events" },
       { table: "articles", label: "Maqolalar", id: "articles" },
       { table: "gallery", label: "Galereya", id: "gallery" },
       { table: "tests", label: "Testlar", id: "tests" },
     ];
+    async function exact(table: string, column?: string, value?: string | boolean) {
+      let query = supabase.from(table).select("id", { count: "exact", head: true });
+      if (column !== undefined && value !== undefined) query = query.eq(column, value);
+      const { count, error: countError } = await query;
+      if (countError) throw countError;
+      return count ?? 0;
+    }
     async function load() {
       setLoading(true);
-      const next: { label: string; value: number; id: SectionId }[] = [];
-      for (const spec of specs) {
-        const { count, error: countError } = await supabase.from(spec.table).select("id", { count: "exact", head: true });
-        if (countError) {
-          setError(countError.message);
-          setLoading(false);
-          return;
+      try {
+        const next: { label: string; value: number; detail: string; id: SectionId }[] = [];
+        for (const spec of content) {
+          const [total, published] = await Promise.all([exact(spec.table), exact(spec.table, "is_published", true)]);
+          const draft = Math.max(0, total - published);
+          next.push({ label: spec.label, value: total, detail: `Nashrda ${published} · Qoralama ${draft}`, id: spec.id });
         }
-        next.push({ label: spec.label, value: count ?? 0, id: spec.id });
+        const [totalApps, pending, approved, rejected] = await Promise.all([
+          exact("membership_applications"),
+          exact("membership_applications", "status", "pending"),
+          exact("membership_applications", "status", "approved"),
+          exact("membership_applications", "status", "rejected"),
+        ]);
+        next.splice(1, 0, {
+          id: "applications",
+          label: "Arizalar",
+          value: totalApps,
+          detail: `Kutilmoqda ${pending} · Tasdiqlangan ${approved} · Rad etilgan ${rejected}`,
+        });
+        setCounts(next);
+        setError("");
+      } catch (err) {
+        setError(errorText(err, "Statistikani yuklab bo'lmadi."));
+      } finally {
+        setLoading(false);
       }
-      const pendingResult = await supabase.from("membership_applications").select("id", { count: "exact", head: true }).eq("status", "pending");
-      if (!pendingResult.error) setPending(pendingResult.count ?? 0);
-      setCounts(next);
-      setError("");
-      setLoading(false);
     }
     void load();
   }, []);
@@ -466,10 +555,10 @@ function DashboardSection({ onOpen }: { onOpen: (id: SectionId) => void }) {
           <button key={item.id} type="button" onClick={() => onOpen(item.id)} className={`${cardClass} text-left transition hover:border-gold-500/40`}>
             <p className="text-sm text-slate-400">{item.label}</p>
             <p className="mt-2 font-serif text-4xl text-gold-400">{item.value}</p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">{item.detail}</p>
           </button>
         ))}
       </div>
-      {!loading && !error ? <p className="mt-4 text-sm text-slate-400">Kutilayotgan arizalar: {pending}</p> : null}
     </section>
   );
 }
@@ -488,7 +577,7 @@ function TeamSection() {
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error: loadError } = await supabase.from("team").select("*").order("created_at", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setItems(rowsOf<TeamRow>(data));
     setLoading(false);
   }, []);
@@ -537,7 +626,8 @@ function TeamSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = await chosenImage(media, "team", editing?.image_url ?? null);
+      const previousImage = editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "team", previousImage, false);
       const payload = {
         full_name: form.full_name.trim(),
         position: form.position.trim(),
@@ -548,7 +638,8 @@ function TeamSection() {
       const result = editing
         ? await supabase.from("team").update(payload).eq("id", editing.id)
         : await supabase.from("team").insert(payload);
-      if (result.error) throw new Error(result.error.message);
+      if (result.error) throw new Error(errorText(result.error, "A'zoni saqlab bo'lmadi."));
+      if (previousImage && previousImage !== image_url) await removeStoredFile(previousImage);
       setSuccess(editing ? "A'zo yangilandi." : "A'zo qo'shildi.");
       closeForm();
       await load();
@@ -560,15 +651,16 @@ function TeamSection() {
   }
 
   async function remove(row: TeamRow) {
-    if (!window.confirm(`${row.full_name} jamoadan o'chirilsinmi?`)) return;
+    if (!(await askConfirm(`${row.full_name} jamoadan o'chirilsinmi?`))) return;
     setError("");
     setSuccess("");
     const { error: deleteError } = await supabase.from("team").delete().eq("id", row.id);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
-    setSuccess("A'zo o'chirildi.");
+    const fileRemoved = await removeStoredFile(row.image_url);
+    setSuccess(fileRemoved ? "A'zo o'chirildi." : "A'zo o'chirildi, lekin surat ombordan o'chmadi.");
     await load();
   }
 
@@ -671,7 +763,7 @@ function ApplicationsSection() {
       .from("membership_applications")
       .select("*")
       .order("created_at", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setItems(rowsOf<ApplicationRow>(data));
     setLoading(false);
   }, []);
@@ -680,17 +772,17 @@ function ApplicationsSection() {
     void load();
   }, [load]);
 
-  async function setStatus(row: ApplicationRow, status: "approved" | "rejected") {
+  async function setStatus(row: ApplicationRow, status: "approved" | "rejected" | "pending") {
     setBusyId(row.id);
     setError("");
     setSuccess("");
     const { error: updateError } = await supabase.from("membership_applications").update({ status }).eq("id", row.id);
     setBusyId(null);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
-    setSuccess(status === "approved" ? "Ariza tasdiqlandi." : "Ariza rad etildi.");
+    setSuccess(status === "approved" ? "Ariza tasdiqlandi." : status === "rejected" ? "Ariza rad etildi." : "Ariza kutilayotgan holatga qaytarildi.");
     await load();
   }
 
@@ -764,6 +856,9 @@ function ApplicationsSection() {
                 <button type="button" disabled={busyId === row.id || kind === "rejected"} onClick={() => void setStatus(row, "rejected")} className={dangerBtn}>
                   Rad etish
                 </button>
+                <button type="button" disabled={busyId === row.id || kind === "pending"} onClick={() => void setStatus(row, "pending")} className={ghostBtn}>
+                  Kutilmoqdaga qaytarish
+                </button>
               </div>
             </article>
           );
@@ -787,7 +882,7 @@ function EventsSection() {
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error: loadError } = await supabase.from("events").select("*").order("event_date", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setItems(rowsOf<EventRow>(data));
     setLoading(false);
   }, []);
@@ -837,7 +932,8 @@ function EventsSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = await chosenImage(media, "events", editing?.image_url ?? null);
+      const previousImage = editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "events", previousImage, true);
       const payload = {
         title: form.title.trim(),
         description: emptyToNull(form.description),
@@ -849,7 +945,8 @@ function EventsSection() {
       const result = editing
         ? await supabase.from("events").update(payload).eq("id", editing.id)
         : await supabase.from("events").insert(payload);
-      if (result.error) throw new Error(result.error.message);
+      if (result.error) throw new Error(errorText(result.error, "Tadbirni saqlab bo'lmadi."));
+      if (previousImage && previousImage !== image_url) await removeStoredFile(previousImage);
       setSuccess(editing ? "Tadbir yangilandi." : "Tadbir qo'shildi.");
       closeForm();
       await load();
@@ -861,15 +958,16 @@ function EventsSection() {
   }
 
   async function remove(row: EventRow) {
-    if (!window.confirm(`"${row.title}" tadbiri o'chirilsinmi?`)) return;
+    if (!(await askConfirm(`"${row.title}" tadbiri o'chirilsinmi?`))) return;
     setError("");
     setSuccess("");
     const { error: deleteError } = await supabase.from("events").delete().eq("id", row.id);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
-    setSuccess("Tadbir o'chirildi.");
+    const fileRemoved = await removeStoredFile(row.image_url);
+    setSuccess(fileRemoved ? "Tadbir o'chirildi." : "Tadbir o'chirildi, lekin media fayl ombordan o'chmadi.");
     await load();
   }
 
@@ -969,7 +1067,7 @@ function ArticlesSection() {
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error: loadError } = await supabase.from("articles").select("*").order("created_at", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setItems(rowsOf<ArticleRow>(data));
     setLoading(false);
   }, []);
@@ -1018,7 +1116,8 @@ function ArticlesSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = await chosenImage(media, "articles", editing?.image_url ?? null);
+      const previousImage = editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "articles", previousImage, true);
       const payload = {
         title: form.title.trim(),
         excerpt: emptyToNull(form.excerpt),
@@ -1029,7 +1128,8 @@ function ArticlesSection() {
       const result = editing
         ? await supabase.from("articles").update(payload).eq("id", editing.id)
         : await supabase.from("articles").insert(payload);
-      if (result.error) throw new Error(result.error.message);
+      if (result.error) throw new Error(errorText(result.error, "Maqolani saqlab bo'lmadi."));
+      if (previousImage && previousImage !== image_url) await removeStoredFile(previousImage);
       setSuccess(editing ? "Maqola yangilandi." : "Maqola saqlandi.");
       closeForm();
       await load();
@@ -1048,7 +1148,7 @@ function ArticlesSection() {
     const { error: updateError } = await supabase.from("articles").update({ is_published: next }).eq("id", row.id);
     setBusyId(null);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
     setSuccess(next ? "Maqola nashrga chiqarildi." : "Maqola nashrdan olindi.");
@@ -1056,15 +1156,16 @@ function ArticlesSection() {
   }
 
   async function remove(row: ArticleRow) {
-    if (!window.confirm(`"${row.title}" maqolasi o'chirilsinmi?`)) return;
+    if (!(await askConfirm(`"${row.title}" maqolasi o'chirilsinmi?`))) return;
     setError("");
     setSuccess("");
     const { error: deleteError } = await supabase.from("articles").delete().eq("id", row.id);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
-    setSuccess("Maqola o'chirildi.");
+    const fileRemoved = await removeStoredFile(row.image_url);
+    setSuccess(fileRemoved ? "Maqola o'chirildi." : "Maqola o'chirildi, lekin media fayl ombordan o'chmadi.");
     await load();
   }
 
@@ -1164,7 +1265,7 @@ function GallerySection() {
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error: loadError } = await supabase.from("gallery").select("*").order("created_at", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setItems(rowsOf<GalleryRow>(data));
     setLoading(false);
   }, []);
@@ -1208,7 +1309,8 @@ function GallerySection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = await chosenImage(media, "gallery", editing?.image_url ?? null);
+      const previousImage = editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "gallery", previousImage, true);
       if (!image_url) throw new Error("Rasm tanlang yoki https manzil kiriting.");
       const payload = {
         title: emptyToNull(form.title) ?? "Lavha",
@@ -1219,7 +1321,8 @@ function GallerySection() {
       const result = editing
         ? await supabase.from("gallery").update(payload).eq("id", editing.id)
         : await supabase.from("gallery").insert(payload);
-      if (result.error) throw new Error(result.error.message);
+      if (result.error) throw new Error(errorText(result.error, "Faylni yuklab bo'lmadi."));
+      if (previousImage && previousImage !== image_url) await removeStoredFile(previousImage);
       setSuccess(editing ? "Galereya yangilandi." : "Galereyaga yuklandi.");
       closeForm();
       await load();
@@ -1231,15 +1334,16 @@ function GallerySection() {
   }
 
   async function remove(row: GalleryRow) {
-    if (!window.confirm("Bu media fayl galereyadan o'chirilsinmi?")) return;
+    if (!(await askConfirm("Bu media fayl galereyadan o'chirilsinmi?"))) return;
     setError("");
     setSuccess("");
     const { error: deleteError } = await supabase.from("gallery").delete().eq("id", row.id);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
-    setSuccess("Media o'chirildi.");
+    const fileRemoved = await removeStoredFile(row.image_url);
+    setSuccess(fileRemoved ? "Media o'chirildi." : "Yozuv o'chirildi, lekin fayl ombordan o'chmadi.");
     await load();
   }
 
@@ -1342,20 +1446,20 @@ function OptionEditor({
     const { error: updateError } = await supabase.from("test_options").update({ option_text: text.trim() }).eq("id", option.id);
     setSaving(false);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
     await onChanged();
   }
 
   async function remove() {
-    if (!window.confirm("Bu javob varianti o'chirilsinmi?")) return;
+    if (!(await askConfirm("Bu javob varianti o'chirilsinmi?"))) return;
     setSaving(true);
     setError("");
     const { error: deleteError } = await supabase.from("test_options").delete().eq("id", option.id);
     setSaving(false);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
     await onChanged();
@@ -1407,26 +1511,26 @@ function QuestionCard({
     const { error: updateError } = await supabase.from("test_questions").update({ question: text.trim() }).eq("id", question.id);
     setSaving(false);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
     await onChanged();
   }
 
   async function removeQuestion() {
-    if (!window.confirm("Savol va uning variantlari o'chirilsinmi?")) return;
+    if (!(await askConfirm("Savol va uning variantlari o'chirilsinmi?"))) return;
     setSaving(true);
     setError("");
     const optionsResult = await supabase.from("test_options").delete().eq("question_id", question.id);
     if (optionsResult.error) {
       setSaving(false);
-      setError(optionsResult.error.message);
+      setError(errorText(optionsResult.error, "Javob variantlarini o'chirib bo'lmadi."));
       return;
     }
     const { error: deleteError } = await supabase.from("test_questions").delete().eq("id", question.id);
     setSaving(false);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
     await onChanged();
@@ -1438,13 +1542,13 @@ function QuestionCard({
     const clearResult = await supabase.from("test_options").update({ is_correct: false }).eq("question_id", question.id);
     if (clearResult.error) {
       setSaving(false);
-      setError(clearResult.error.message);
+      setError(errorText(clearResult.error, "To'g'ri javobni yangilab bo'lmadi."));
       return;
     }
     const { error: updateError } = await supabase.from("test_options").update({ is_correct: true }).eq("id", optionId);
     setSaving(false);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
     await onChanged();
@@ -1462,7 +1566,7 @@ function QuestionCard({
       const clearResult = await supabase.from("test_options").update({ is_correct: false }).eq("question_id", question.id);
       if (clearResult.error) {
         setSaving(false);
-        setError(clearResult.error.message);
+        setError(errorText(clearResult.error, "To'g'ri javobni yangilab bo'lmadi."));
         return;
       }
     }
@@ -1473,7 +1577,7 @@ function QuestionCard({
     });
     setSaving(false);
     if (insertError) {
-      setError(insertError.message);
+      setError(errorText(insertError, "Saqlab bo'lmadi."));
       return;
     }
     setOptionText("");
@@ -1545,7 +1649,7 @@ function TestsSection() {
   const load = useCallback(async () => {
     setLoading(true);
     const { data, error: loadError } = await supabase.from("tests").select("*").order("created_at", { ascending: false });
-    if (loadError) setError(loadError.message);
+    if (loadError) setError(errorText(loadError, "Ma'lumot yuklanmadi."));
     else setTests(rowsOf<TestRow>(data));
     setLoading(false);
   }, []);
@@ -1558,7 +1662,7 @@ function TestsSection() {
       .eq("test_id", testId)
       .order("created_at", { ascending: true });
     if (loadError) {
-      setError(loadError.message);
+      setError(errorText(loadError, "Ma'lumot yuklanmadi."));
       setQuestionsLoading(false);
       return;
     }
@@ -1571,7 +1675,7 @@ function TestsSection() {
       return;
     }
     const optionsResult = await supabase.from("test_options").select("id,question_id,option_text,is_correct").in("question_id", ids).order("id", { ascending: true });
-    if (optionsResult.error) setError(optionsResult.error.message);
+    if (optionsResult.error) setError(errorText(optionsResult.error, "Javob variantlarini o'chirib bo'lmadi."));
     else setOptions(rowsOf<OptionRow>(optionsResult.data));
     setQuestionsLoading(false);
   }, []);
@@ -1633,7 +1737,7 @@ function TestsSection() {
       const { data, error: insertError } = await supabase.from("tests").insert(payload).select("*").single();
       setSaving(false);
       if (insertError || !data) {
-        setError(insertError?.message || "Test saqlanmadi.");
+        setError(errorText(insertError, "Test saqlanmadi."));
         return;
       }
       const created = data as TestRow;
@@ -1646,7 +1750,7 @@ function TestsSection() {
     const { error: updateError } = await supabase.from("tests").update(payload).eq("id", selectedId);
     setSaving(false);
     if (updateError) {
-      setError(updateError.message);
+      setError(errorText(updateError, "Saqlab bo'lmadi."));
       return;
     }
     setSuccess("Test yangilandi.");
@@ -1655,14 +1759,14 @@ function TestsSection() {
 
   async function removeTest() {
     if (!selectedId) return;
-    if (!window.confirm("Test, savollari va javob variantlari o'chirilsinmi?")) return;
+    if (!(await askConfirm("Test, savollari va javob variantlari o'chirilsinmi?"))) return;
     setSaving(true);
     setError("");
     setSuccess("");
     const { data, error: questionsError } = await supabase.from("test_questions").select("id").eq("test_id", selectedId);
     if (questionsError) {
       setSaving(false);
-      setError(questionsError.message);
+      setError(errorText(questionsError, "Savollarni o'chirib bo'lmadi."));
       return;
     }
     const ids = rowsOf<{ id: string }>(data).map((question) => question.id);
@@ -1670,20 +1774,20 @@ function TestsSection() {
       const optionsResult = await supabase.from("test_options").delete().in("question_id", ids);
       if (optionsResult.error) {
         setSaving(false);
-        setError(optionsResult.error.message);
+        setError(errorText(optionsResult.error, "Javob variantlarini o'chirib bo'lmadi."));
         return;
       }
       const questionsResult = await supabase.from("test_questions").delete().eq("test_id", selectedId);
       if (questionsResult.error) {
         setSaving(false);
-        setError(questionsResult.error.message);
+        setError(errorText(questionsResult.error, "Savollarni o'chirib bo'lmadi."));
         return;
       }
     }
     const { error: deleteError } = await supabase.from("tests").delete().eq("id", selectedId);
     setSaving(false);
     if (deleteError) {
-      setError(deleteError.message);
+      setError(errorText(deleteError, "O'chirib bo'lmadi."));
       return;
     }
     setSelectedId(null);
@@ -1710,7 +1814,7 @@ function TestsSection() {
     });
     setSaving(false);
     if (insertError) {
-      setError(insertError.message);
+      setError(errorText(insertError, "Saqlab bo'lmadi."));
       return;
     }
     setQuestionText("");
@@ -1821,6 +1925,59 @@ function ProfileSection({ email, busy, error, onLogout }: { email: string; busy:
   const [confirm, setConfirm] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [contact, setContact] = useState({ email: "", telegram: "", phone: "", address: "" });
+  const [contactMessage, setContactMessage] = useState("");
+  const [contactSaving, setContactSaving] = useState(false);
+
+  useEffect(() => {
+    async function loadSettings() {
+      const { data, error: loadError } = await supabase.from("site_settings").select("email,telegram,phone,address").eq("id", 1).maybeSingle();
+      if (loadError) {
+        setContactMessage(errorText(loadError, "Aloqa sozlamalari yuklanmadi."));
+        return;
+      }
+      const row = (data ?? {}) as { email?: string | null; telegram?: string | null; phone?: string | null; address?: string | null };
+      setContact({
+        email: row.email ?? "",
+        telegram: row.telegram ?? "",
+        phone: row.phone ?? "",
+        address: row.address ?? "",
+      });
+    }
+    void loadSettings();
+  }, []);
+
+  async function saveContact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setContactMessage("");
+    const emailValue = contact.email.trim().toLowerCase();
+    const phoneValue = contact.phone.trim();
+    if (emailValue && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue)) {
+      setContactMessage("Email manzilini to'g'ri kiriting.");
+      return;
+    }
+    const digits = phoneValue.replace(/[^\d]/g, "");
+    if (phoneValue && (digits.length < 9 || digits.length > 15)) {
+      setContactMessage("Telefon raqamini to'g'ri kiriting.");
+      return;
+    }
+    setContactSaving(true);
+    const payload = {
+      id: 1,
+      email: emailValue || null,
+      telegram: contact.telegram.trim() || null,
+      phone: phoneValue || null,
+      address: contact.address.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error: saveError } = await supabase.from("site_settings").upsert(payload, { onConflict: "id" });
+    setContactSaving(false);
+    if (saveError) {
+      setContactMessage(errorText(saveError, "Aloqa ma'lumotlari saqlanmadi."));
+      return;
+    }
+    setContactMessage("Aloqa ma'lumotlari saqlandi.");
+  }
 
   async function savePassword(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1837,7 +1994,7 @@ function ProfileSection({ email, busy, error, onLogout }: { email: string; busy:
     const { error: updateError } = await supabase.auth.updateUser({ password });
     setSaving(false);
     if (updateError) {
-      setMessage(updateError.message);
+      setMessage(errorText(updateError, "Parol yangilanmadi."));
       return;
     }
     setPassword("");
@@ -1855,6 +2012,28 @@ function ProfileSection({ email, busy, error, onLogout }: { email: string; busy:
         <p className="mt-3 text-sm text-slate-400">Kirgan hisob</p>
         <p className="mt-1 break-all text-white">{email || "Email ko'rinmayapti"}</p>
       </div>
+      <form onSubmit={(event) => void saveContact(event)} className={`${cardClass} space-y-4`}>
+        <h3 className="font-serif text-xl text-white">Sayt aloqasi</h3>
+        <p className="text-sm leading-6 text-slate-400">Bu ma'lumotlar pastki qism va aloqa sahifasida ko'rinadi.</p>
+        <label className="block">
+          <span className={labelClass}>Email</span>
+          <input type="email" value={contact.email} onChange={(event) => setContact({ ...contact, email: event.target.value })} className={fieldClass} />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Telefon</span>
+          <input value={contact.phone} onChange={(event) => setContact({ ...contact, phone: event.target.value })} className={fieldClass} placeholder="+998" />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Telegram</span>
+          <input value={contact.telegram} onChange={(event) => setContact({ ...contact, telegram: event.target.value })} className={fieldClass} placeholder="@kanal yoki https://t.me/kanal" />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Manzil</span>
+          <input value={contact.address} onChange={(event) => setContact({ ...contact, address: event.target.value })} className={fieldClass} />
+        </label>
+        {contactMessage ? <p role="status" className="text-sm text-gold-300">{contactMessage}</p> : null}
+        <button type="submit" disabled={contactSaving} className={goldBtn}>{contactSaving ? "Saqlanmoqda..." : "Aloqani saqlash"}</button>
+      </form>
       <form onSubmit={(event) => void savePassword(event)} className={`${cardClass} space-y-4`}>
         <h3 className="font-serif text-xl text-white">Parolni yangilash</h3>
         <label className="block">
@@ -1937,7 +2116,7 @@ export default function AdminPage() {
     await clearServerSession();
     const { error } = await supabase.auth.signOut();
     if (error) {
-      setLogoutError(error.message);
+      setLogoutError(errorText(error, "Chiqib bo'lmadi."));
       setSigningOut(false);
       return;
     }
@@ -1954,6 +2133,7 @@ export default function AdminPage() {
 
   return (
     <div className="flex bg-navy-950 text-slate-200">
+      <ConfirmHost />
       {menuOpen ? (
         <button type="button" aria-label="Menyuni yopish" className="fixed inset-0 z-30 bg-black/60 lg:hidden" onClick={() => setMenuOpen(false)} />
       ) : null}

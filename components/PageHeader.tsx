@@ -23,6 +23,3 @@ export function SectionHead({ eyebrow, title, href, cta = "Barchasi" }: { eyebro
   );
 }
 
-export const Placeholder = ({ text = "Namunaviy ma'lumotlar: haqiqiy kontent bilan almashtiriladi." }: { text?: string }) => (
-  <p role="note" className="mb-8 rounded-xl border border-gold-500/30 bg-gold-500/5 px-4 py-3 text-sm text-gold-300">{text}</p>
-);

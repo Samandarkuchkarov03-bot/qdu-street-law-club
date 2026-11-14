@@ -10,7 +10,7 @@ function applicationError(error: { message?: string; code?: string }): string {
   if (error.code === "23505") return "Bu email bilan ariza avval yuborilgan.";
   if (error.code === "23514") return "Ariza holati qabul qilinmadi. Qayta urinib ko'ring.";
   if (error.code === "42501" || /row-level security/i.test(message)) {
-    return "Ariza qabul qilinmadi. Server yangi arizani saqlashga ruxsat bermadi.";
+    return "Ariza hozir qabul qilinmadi. Iltimos, birozdan so'ng qayta urinib ko'ring.";
   }
   if (/fetch|network|failed to fetch/i.test(message)) {
     return "Tarmoq xatosi. Internetni tekshirib, qayta urinib ko'ring.";

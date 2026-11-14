@@ -93,7 +93,10 @@ export default function AdminLoginPage() {
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${site.url}/auth/callback`,
     });
-    if (resetError) setError(resetError.message);
+    if (resetError) {
+      const known = loginError(resetError);
+      setError(known === "Kirish amalga oshmadi. Qayta urinib ko'ring." ? "Tiklash xati yuborilmadi. Emailni tekshirib, qayta urinib ko'ring." : known);
+    }
     else setNotice("Parolni tiklash havolasi emailingizga yuborildi.");
     setResetLoading(false);
   }

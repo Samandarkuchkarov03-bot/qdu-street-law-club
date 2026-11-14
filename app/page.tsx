@@ -6,7 +6,8 @@ import MemberCard from "@/components/MemberCard";
 import EventCard from "@/components/EventCard";
 import GalleryGrid from "@/components/GalleryGrid";
 import { SectionHead } from "@/components/PageHeader";
-import { getArticles, getEvents, getFeaturedMembers, getGallery, getLatestEvents, getMembers, getQuizzes } from "@/lib/repository";
+import { getArticles, getEvents, getGallery, getMembers, getQuizzes } from "@/lib/repository";
+import type { ClubEvent } from "@/types";
 import { site } from "@/data/site";
 
 export const dynamic = "force-dynamic";
@@ -18,18 +19,24 @@ const pillars = [
   { icon: Gavel, title: "Amaliyot", text: "Munozara, sud simulyatsiyasi va ochiq darslar orqali o'rganamiz." },
 ];
 
+function latestEvents(events: ClubEvent[], limit = 3): ClubEvent[] {
+  const upcoming = events.filter((event) => event.status === "upcoming");
+  const rest = events.filter((event) => event.status !== "upcoming").reverse();
+  return [...upcoming, ...rest].slice(0, limit);
+}
+
 export default async function Home() {
-  const [featured, latest, gallery, all, events, articles, quizzes] = await Promise.all([
-    getFeaturedMembers(),
-    getLatestEvents(3),
-    getGallery(),
+  const [members, events, gallery, articles, quizzes] = await Promise.all([
     getMembers(),
     getEvents(),
+    getGallery(),
     getArticles(),
     getQuizzes(),
   ]);
+  const featured = members.slice(0, 3);
+  const latest = latestEvents(events, 3);
   const stats = [
-    { label: "Jamoa a'zolari", value: all.length },
+    { label: "Jamoa a'zolari", value: members.length },
     { label: "Tadbirlar", value: events.length },
     { label: "Maqolalar", value: articles.length },
     { label: "Interaktiv testlar", value: quizzes.length },

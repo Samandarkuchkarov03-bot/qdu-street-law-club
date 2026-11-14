@@ -28,7 +28,7 @@ export default function ApplicationForm() {
         contact: String(f.get("contact") ?? ""),
         email: String(f.get("email") ?? ""),
         motivation: String(f.get("motivation") ?? ""),
-        company: String(f.get("company") ?? ""),
+        company: String(f.get("website_url_confirm") ?? ""),
       });
       if (!result.ok) {
         setError(result.error);
@@ -68,8 +68,8 @@ export default function ApplicationForm() {
       </div>
       <Field id="motivation" label="Nega klubga qo'shilmoqchisiz?"><textarea id="motivation" name="motivation" required minLength={20} maxLength={2000} rows={5} disabled={sending} className="input disabled:opacity-60" /></Field>
       <div className="sr-only" aria-hidden>
-        <label htmlFor="company">Kompaniya</label>
-        <input id="company" name="company" tabIndex={-1} autoComplete="off" />
+        <label htmlFor="website_url_confirm">Veb-sayt</label>
+        <input id="website_url_confirm" name="website_url_confirm" tabIndex={-1} autoComplete="off" />
       </div>
       <label className="flex items-start gap-3 text-sm"><input type="checkbox" required disabled={sending} className="mt-1 accent-[#d4af37]" />Ma'lumotlarim ariza ko'rib chiqilishi uchun ishlatilishiga roziman.</label>
       {error ? <p role="alert" className="rounded-xl border border-red-400/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}

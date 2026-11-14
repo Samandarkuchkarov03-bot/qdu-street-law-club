@@ -9,7 +9,7 @@ export default function EventCard({ e }: { e: ClubEvent }) {
     <article className="card flex h-full flex-col overflow-hidden">
       {e.imageUrl ? (
         <div className="relative h-44 w-full bg-navy-900">
-          {e.video ? <video src={e.imageUrl} className="h-full w-full object-cover" muted playsInline /> : <SmartImage src={e.imageUrl} alt="" className="object-cover" />}
+          {e.video ? <video src={e.imageUrl} className="h-full w-full object-cover" muted playsInline /> : <SmartImage src={e.imageUrl} alt={e.title} className="object-cover" />}
         </div>
       ) : null}
       <div className="flex flex-1 flex-col p-5 min-[431px]:p-6">

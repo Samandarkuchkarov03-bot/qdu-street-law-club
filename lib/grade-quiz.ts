@@ -10,14 +10,21 @@ type Answer = { questionId: string; optionId: string };
 
 const UUID = /^[0-9a-f-]{36}$/i;
 
-export async function gradeQuiz(testId: string, answers: Answer[]): Promise<GradeResult> {
-  if (!UUID.test(testId) || !Array.isArray(answers) || answers.length > 100) {
-    return { ok: false, error: "Test javoblari noto'g'ri yuborildi." };
-  }
-  if (answers.some((answer) => !UUID.test(answer.questionId) || !UUID.test(answer.optionId))) {
-    return { ok: false, error: "Javob identifikatori noto'g'ri." };
-  }
+function missingFunction(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === "PGRST202" || /could not find the function/i.test(error.message ?? "");
+}
 
+function asGrade(value: unknown): GradeResult | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as { ok?: unknown; score?: unknown; total?: unknown; correctOptionIds?: unknown; error?: unknown };
+  if (row.ok === false) return { ok: false, error: typeof row.error === "string" ? row.error : "Testni baholab bo'lmadi." };
+  if (row.ok !== true || typeof row.score !== "number" || typeof row.total !== "number" || !Array.isArray(row.correctOptionIds)) return null;
+  const correctOptionIds = row.correctOptionIds.filter((id): id is string => typeof id === "string");
+  return { ok: true, score: row.score, total: row.total, correctOptionIds };
+}
+
+async function gradeFromTable(testId: string, answers: Answer[]): Promise<GradeResult> {
   const supabase = createServerSupabase();
   const { data: test, error: testError } = await supabase.from("tests").select("id,is_published").eq("id", testId).maybeSingle();
   if (testError || !test?.is_published) return { ok: false, error: "Test topilmadi yoki nashr qilinmagan." };
@@ -35,7 +42,12 @@ export async function gradeQuiz(testId: string, answers: Answer[]): Promise<Grad
   if (questionIds.some((id) => !picked.has(id))) return { ok: false, error: "Barcha savollarga javob bering." };
 
   const { data: options, error: optionsError } = await supabase.from("test_options").select("id,question_id,is_correct").in("question_id", questionIds);
-  if (optionsError) return { ok: false, error: "Javoblarni tekshirib bo'lmadi." };
+  if (optionsError) {
+    if (optionsError.code === "42501" || /permission denied|is_correct/i.test(optionsError.message)) {
+      return { ok: false, error: "Testni baholash funksiyasi o'rnatilmagan. SQL migratsiyasini ishga tushiring." };
+    }
+    return { ok: false, error: "Javoblarni tekshirib bo'lmadi." };
+  }
 
   const correctByQuestion = new Map<string, string[]>();
   const optionQuestion = new Map<string, string>();
@@ -60,4 +72,26 @@ export async function gradeQuiz(testId: string, answers: Answer[]): Promise<Grad
   }
 
   return { ok: true, score, total: questionIds.length, correctOptionIds };
+}
+
+export async function gradeQuiz(testId: string, answers: Answer[]): Promise<GradeResult> {
+  if (!UUID.test(testId) || !Array.isArray(answers) || answers.length > 100) {
+    return { ok: false, error: "Test javoblari noto'g'ri yuborildi." };
+  }
+  if (answers.some((answer) => !answer || !UUID.test(answer.questionId) || !UUID.test(answer.optionId))) {
+    return { ok: false, error: "Javob identifikatori noto'g'ri." };
+  }
+
+  const supabase = createServerSupabase();
+  const { data, error } = await supabase.rpc("grade_published_test", {
+    p_test_id: testId,
+    p_answers: answers,
+  });
+  if (!error) {
+    const graded = asGrade(data);
+    if (graded) return graded;
+    return { ok: false, error: "Test natijasini o'qib bo'lmadi." };
+  }
+  if (missingFunction(error)) return gradeFromTable(testId, answers);
+  return { ok: false, error: "Testni baholab bo'lmadi." };
 }

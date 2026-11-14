@@ -11,6 +11,8 @@ import { site } from "@/data/site";
 const sans = Inter({ subsets: ["latin", "latin-ext"], variable: "--font-sans" });
 const serif = Playfair_Display({ subsets: ["latin", "latin-ext"], variable: "--font-serif" });
 
+export const dynamic = "force-dynamic";
+
 const description = `${site.university} talabalarining huquqiy ta'lim klubi. ${site.tagline}`;
 
 export const metadata: Metadata = {

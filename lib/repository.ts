@@ -1,5 +1,13 @@
+import { site } from "@/data/site";
 import { createServerSupabase } from "@/lib/supabase-server";
 import type { Article, ClubEvent, GalleryItem, Member, Quiz } from "@/types";
+
+export type PublicContact = {
+  email: string;
+  telegram: string;
+  phone: string;
+  address: string;
+};
 
 const TIME_ZONE = "Asia/Tashkent";
 
@@ -94,6 +102,24 @@ function mapGallery(row: Row): GalleryItem {
     src: image || undefined,
     video: image ? isVideoUrl(image) : false,
   };
+}
+
+export async function getPublicContact(): Promise<PublicContact> {
+  const fallback: PublicContact = { email: "", telegram: "", phone: "", address: site.address };
+  try {
+    const supabase = createServerSupabase();
+    const { data, error } = await supabase.from("site_settings").select("email,telegram,phone,address").eq("id", 1).maybeSingle();
+    if (error || !data) return fallback;
+    const row = data as Row;
+    return {
+      email: text(row.email),
+      telegram: text(row.telegram),
+      phone: text(row.phone),
+      address: text(row.address) || fallback.address,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 export async function getMembers(): Promise<Member[]> {

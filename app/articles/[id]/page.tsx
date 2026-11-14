@@ -23,7 +23,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 export default async function ArticlePage({ params }: Params) {
   const article = await getArticle(params.id);
   if (!article) notFound();
-  const paragraphs = article.content.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const paragraphs = article.content.split(/\n+/).map((part) => part.trim()).filter(Boolean);
 
   return (
     <article className="container-x max-w-3xl py-12">
@@ -35,7 +35,7 @@ export default async function ArticlePage({ params }: Params) {
       </p>
       {article.imageUrl ? (
         <div className="relative mt-8 h-64 overflow-hidden rounded-2xl bg-navy-900 sm:h-80">
-          {article.video ? <video src={article.imageUrl} controls className="h-full w-full object-cover" /> : <SmartImage src={article.imageUrl} alt="" className="object-cover" />}
+          {article.video ? <video src={article.imageUrl} controls className="h-full w-full object-cover" /> : <SmartImage src={article.imageUrl} alt={article.title} className="object-cover" />}
         </div>
       ) : null}
       <div className="mt-8 space-y-4 text-base leading-7 text-slate-300">
