@@ -6,6 +6,7 @@ export const site = {
   email: "info@example.uz",
   telegram: "@namuna_kanal",
   address: "Nukus, Qoraqalpog'iston Respublikasi",
+  url: "https://qdu-street-law-club-8buc.vercel.app",
 };
 export const nav = [
   { href: "/", label: "Bosh sahifa" },

@@ -8,18 +8,21 @@ import {
   FileText,
   ImagePlus,
   Inbox,
+  LayoutDashboard,
   LogOut,
   Menu,
   Pencil,
   Plus,
   Trash2,
   Upload,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { clearServerSession, syncServerSession } from "@/lib/auth-session";
 
-type SectionId = "team" | "applications" | "events" | "articles" | "gallery" | "tests" | "logout";
+type SectionId = "dashboard" | "team" | "applications" | "events" | "articles" | "gallery" | "tests" | "profile";
 
 type TeamRow = {
   id: string;
@@ -98,7 +101,6 @@ type OptionRow = {
 
 type ApplicationFilter = "all" | "pending" | "approved" | "rejected";
 
-const BUCKET = "street-law-media";
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 
 const fieldClass =
@@ -113,13 +115,14 @@ const dangerBtn =
 const cardClass = "rounded-2xl border border-white/10 bg-navy-900/70 p-4";
 
 const NAV: { id: SectionId; label: string; icon: typeof Users }[] = [
+  { id: "dashboard", label: "Boshqaruv", icon: LayoutDashboard },
   { id: "team", label: "Jamoa a'zolari", icon: Users },
   { id: "applications", label: "A'zolik arizalari", icon: Inbox },
   { id: "events", label: "Tadbirlar", icon: CalendarDays },
   { id: "articles", label: "Maqolalar", icon: FileText },
   { id: "gallery", label: "Galereya", icon: ImagePlus },
   { id: "tests", label: "Testlar", icon: ClipboardList },
-  { id: "logout", label: "Chiqish", icon: LogOut },
+  { id: "profile", label: "Profil", icon: UserRound },
 ];
 
 function rowsOf<T>(data: unknown): T[] {
@@ -157,9 +160,12 @@ function formatWhen(value: string | null): string {
   }).format(date);
 }
 
-function dateInputValue(value: string | null): string {
+function dateTimeInputValue(value: string | null): string {
   if (!value) return "";
-  return value.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function isVideoUrl(url: string): boolean {
@@ -180,19 +186,35 @@ function statusLabel(status: string | null): string {
   return "Kutilmoqda";
 }
 
+async function resolveBucket(): Promise<string> {
+  const { data, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error("Storage ro'yxatini olib bo'lmadi. Dashboardda public bucket yarating.");
+  const buckets = data ?? [];
+  const usable = buckets.filter((bucket) => bucket.public);
+  if (usable.length === 1) return usable[0].name;
+  if (buckets.length === 0) {
+    throw new Error("Supabase Storage'da public bucket yo'q. Dashboard → Storage bo'limida bitta public bucket yarating, keyin qayta urinib ko'ring.");
+  }
+  if (usable.length === 0) {
+    throw new Error("Storage bucketlar bor, lekin public emas. Rasmlar saytda ochilishi uchun bucket public bo'lishi kerak.");
+  }
+  throw new Error("Bir nechta public bucket topildi. Bittasini qoldiring yoki qolganlarini yoping.");
+}
+
 async function uploadToBucket(file: File, folder: string): Promise<string> {
   if (file.size > MAX_MEDIA_BYTES) {
     throw new Error("Fayl 50 MB dan katta bo'lmasligi kerak.");
   }
+  const bucket = await resolveBucket();
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `${folder}/${crypto.randomUUID()}-${safeName}`;
-  const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
+  const { error } = await supabase.storage.from(bucket).upload(path, file, {
     cacheControl: "3600",
     upsert: false,
     contentType: file.type || "application/octet-stream",
   });
   if (error) throw new Error(error.message);
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   if (!data.publicUrl) throw new Error("Yuklangan fayl manzili olinmadi.");
   return data.publicUrl;
 }
@@ -201,6 +223,7 @@ function useMediaPicker() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [clearImage, setClearImage] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState("");
   const previewRef = useRef<string | null>(null);
 
   const pick = useCallback((next: File | null) => {
@@ -215,6 +238,7 @@ function useMediaPicker() {
   const reset = useCallback(() => {
     pick(null);
     setClearImage(false);
+    setRemoteUrl("");
   }, [pick]);
 
   const markClear = useCallback(() => {
@@ -228,7 +252,18 @@ function useMediaPicker() {
     };
   }, []);
 
-  return { file, preview, clearImage, pick, reset, markClear };
+  return { file, preview, clearImage, remoteUrl, setRemoteUrl, pick, reset, markClear };
+}
+
+async function chosenImage(media: { file: File | null; clearImage: boolean; remoteUrl: string }, folder: string, current: string | null): Promise<string | null> {
+  if (media.file) return uploadToBucket(media.file, folder);
+  if (media.clearImage) return null;
+  const remote = media.remoteUrl.trim();
+  if (remote) {
+    if (!/^https:\/\/\S+$/i.test(remote)) throw new Error("Rasm manzili https:// bilan boshlanishi kerak.");
+    return remote;
+  }
+  return current;
 }
 
 function Alerts({ error, success }: { error: string; success: string }) {
@@ -326,9 +361,11 @@ function MediaFields({
   preview,
   currentUrl,
   clearImage,
+  remoteUrl,
   video,
   onPick,
   onClear,
+  onRemote,
 }: {
   label: string;
   accept: string;
@@ -336,11 +373,14 @@ function MediaFields({
   preview: string | null;
   currentUrl: string | null;
   clearImage: boolean;
+  remoteUrl: string;
   video: boolean;
   onPick: (file: File | null) => void;
   onClear: () => void;
+  onRemote: (value: string) => void;
 }) {
-  const shown = preview || (!clearImage ? currentUrl : null);
+  const remoteOk = /^https:\/\/\S+$/i.test(remoteUrl.trim()) ? remoteUrl.trim() : null;
+  const shown = preview || remoteOk || (!clearImage ? currentUrl : null);
   return (
     <div>
       <span className={labelClass}>{label}</span>
@@ -362,7 +402,11 @@ function MediaFields({
           </button>
         ) : null}
       </div>
-      <p className="mt-2 text-xs text-slate-500">Fayl Supabase Storage’dagi {BUCKET} bucketiga yuklanadi va public URL saqlanadi.</p>
+      <label className="mt-3 block">
+        <span className="mb-1.5 block text-xs text-slate-400">Yoki tayyor https manzil</span>
+        <input value={remoteUrl} onChange={(event) => onRemote(event.target.value)} placeholder="https://" className={fieldClass} />
+      </label>
+      <p className="mt-2 text-xs text-slate-500">Fayl faqat Supabase'da mavjud bitta public bucket bo'lsa yuklanadi. Bucket yo'q bo'lsa, tayyor rasm manzilini kiriting.</p>
     </div>
   );
 }
@@ -373,6 +417,60 @@ function PublishField({ checked, onChange, label = "Nashrga chiqarish" }: { chec
       <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-[#d4af37]" />
       {label}
     </label>
+  );
+}
+
+function DashboardSection({ onOpen }: { onOpen: (id: SectionId) => void }) {
+  const [counts, setCounts] = useState<{ label: string; value: number; id: SectionId }[]>([]);
+  const [pending, setPending] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const specs: { table: string; label: string; id: SectionId }[] = [
+      { table: "team", label: "Jamoa", id: "team" },
+      { table: "membership_applications", label: "Arizalar", id: "applications" },
+      { table: "events", label: "Tadbirlar", id: "events" },
+      { table: "articles", label: "Maqolalar", id: "articles" },
+      { table: "gallery", label: "Galereya", id: "gallery" },
+      { table: "tests", label: "Testlar", id: "tests" },
+    ];
+    async function load() {
+      setLoading(true);
+      const next: { label: string; value: number; id: SectionId }[] = [];
+      for (const spec of specs) {
+        const { count, error: countError } = await supabase.from(spec.table).select("id", { count: "exact", head: true });
+        if (countError) {
+          setError(countError.message);
+          setLoading(false);
+          return;
+        }
+        next.push({ label: spec.label, value: count ?? 0, id: spec.id });
+      }
+      const pendingResult = await supabase.from("membership_applications").select("id", { count: "exact", head: true }).eq("status", "pending");
+      if (!pendingResult.error) setPending(pendingResult.count ?? 0);
+      setCounts(next);
+      setError("");
+      setLoading(false);
+    }
+    void load();
+  }, []);
+
+  return (
+    <section>
+      <SectionHeading title="Boshqaruv" text="Nashrlar, arizalar va testlar bo'yicha joriy raqamlar." />
+      <Alerts error={error} success="" />
+      {loading ? <LoadingBlock /> : null}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {counts.map((item) => (
+          <button key={item.id} type="button" onClick={() => onOpen(item.id)} className={`${cardClass} text-left transition hover:border-gold-500/40`}>
+            <p className="text-sm text-slate-400">{item.label}</p>
+            <p className="mt-2 font-serif text-4xl text-gold-400">{item.value}</p>
+          </button>
+        ))}
+      </div>
+      {!loading && !error ? <p className="mt-4 text-sm text-slate-400">Kutilayotgan arizalar: {pending}</p> : null}
+    </section>
   );
 }
 
@@ -439,11 +537,7 @@ function TeamSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = media.file
-        ? await uploadToBucket(media.file, "team")
-        : media.clearImage
-          ? null
-          : editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "team", editing?.image_url ?? null);
       const payload = {
         full_name: form.full_name.trim(),
         position: form.position.trim(),
@@ -545,9 +639,11 @@ function TeamSection() {
               preview={media.preview}
               currentUrl={editing?.image_url ?? null}
               clearImage={media.clearImage}
+              remoteUrl={media.remoteUrl}
               video={false}
               onPick={media.pick}
               onClear={media.markClear}
+              onRemote={media.setRemoteUrl}
             />
             <PublishField checked={form.is_published} onChange={(is_published) => setForm({ ...form, is_published })} />
             <div className="flex flex-wrap gap-2 pt-2">
@@ -720,7 +816,7 @@ function EventsSection() {
     setForm({
       title: row.title ?? "",
       description: row.description ?? "",
-      event_date: dateInputValue(row.event_date),
+      event_date: dateTimeInputValue(row.event_date),
       location: row.location ?? "",
       is_published: Boolean(row.is_published),
     });
@@ -741,15 +837,11 @@ function EventsSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = media.file
-        ? await uploadToBucket(media.file, "events")
-        : media.clearImage
-          ? null
-          : editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "events", editing?.image_url ?? null);
       const payload = {
         title: form.title.trim(),
         description: emptyToNull(form.description),
-        event_date: form.event_date || null,
+        event_date: form.event_date ? new Date(form.event_date).toISOString() : null,
         location: emptyToNull(form.location),
         image_url,
         is_published: form.is_published,
@@ -825,8 +917,8 @@ function EventsSection() {
             </label>
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
-                <span className={labelClass}>Sana</span>
-                <input type="date" value={form.event_date} onChange={(event) => setForm({ ...form, event_date: event.target.value })} className={fieldClass} />
+                <span className={labelClass}>Sana va vaqt</span>
+                <input type="datetime-local" value={form.event_date} onChange={(event) => setForm({ ...form, event_date: event.target.value })} className={fieldClass} />
               </label>
               <label className="block">
                 <span className={labelClass}>Joy</span>
@@ -844,9 +936,11 @@ function EventsSection() {
               preview={media.preview}
               currentUrl={editing?.image_url ?? null}
               clearImage={media.clearImage}
+              remoteUrl={media.remoteUrl}
               video={Boolean(media.file?.type.startsWith("video/"))}
               onPick={media.pick}
               onClear={media.markClear}
+              onRemote={media.setRemoteUrl}
             />
             <PublishField checked={form.is_published} onChange={(is_published) => setForm({ ...form, is_published })} />
             <div className="flex flex-wrap gap-2 pt-2">
@@ -924,11 +1018,7 @@ function ArticlesSection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = media.file
-        ? await uploadToBucket(media.file, "articles")
-        : media.clearImage
-          ? null
-          : editing?.image_url ?? null;
+      const image_url = await chosenImage(media, "articles", editing?.image_url ?? null);
       const payload = {
         title: form.title.trim(),
         excerpt: emptyToNull(form.excerpt),
@@ -1042,9 +1132,11 @@ function ArticlesSection() {
               preview={media.preview}
               currentUrl={editing?.image_url ?? null}
               clearImage={media.clearImage}
+              remoteUrl={media.remoteUrl}
               video={Boolean(media.file?.type.startsWith("video/"))}
               onPick={media.pick}
               onClear={media.markClear}
+              onRemote={media.setRemoteUrl}
             />
             <PublishField checked={form.is_published} onChange={(is_published) => setForm({ ...form, is_published })} />
             <div className="flex flex-wrap gap-2 pt-2">
@@ -1065,6 +1157,7 @@ function GallerySection() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<GalleryRow | null>(null);
   const [form, setForm] = useState({ title: "", description: "", is_published: true });
   const media = useMediaPicker();
 
@@ -1080,8 +1173,24 @@ function GallerySection() {
     void load();
   }, [load]);
 
+  function closeForm() {
+    setOpen(false);
+    setEditing(null);
+    media.reset();
+  }
+
   function openCreate() {
+    setEditing(null);
     setForm({ title: "", description: "", is_published: true });
+    media.reset();
+    setError("");
+    setSuccess("");
+    setOpen(true);
+  }
+
+  function openEdit(row: GalleryRow) {
+    setEditing(row);
+    setForm({ title: row.title ?? "", description: row.description ?? "", is_published: Boolean(row.is_published) });
     media.reset();
     setError("");
     setSuccess("");
@@ -1090,8 +1199,8 @@ function GallerySection() {
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!media.file) {
-      setError("Rasm yoki video tanlang.");
+    if (!media.file && !media.remoteUrl.trim() && !editing?.image_url) {
+      setError("Rasm tanlang yoki https manzil kiriting.");
       setSuccess("");
       return;
     }
@@ -1099,17 +1208,20 @@ function GallerySection() {
     setError("");
     setSuccess("");
     try {
-      const image_url = await uploadToBucket(media.file, "gallery");
-      const { error: insertError } = await supabase.from("gallery").insert({
-        title: emptyToNull(form.title) ?? media.file.name,
+      const image_url = await chosenImage(media, "gallery", editing?.image_url ?? null);
+      if (!image_url) throw new Error("Rasm tanlang yoki https manzil kiriting.");
+      const payload = {
+        title: emptyToNull(form.title) ?? "Lavha",
         description: emptyToNull(form.description),
         image_url,
         is_published: form.is_published,
-      });
-      if (insertError) throw new Error(insertError.message);
-      setSuccess("Galereyaga yuklandi.");
-      setOpen(false);
-      media.reset();
+      };
+      const result = editing
+        ? await supabase.from("gallery").update(payload).eq("id", editing.id)
+        : await supabase.from("gallery").insert(payload);
+      if (result.error) throw new Error(result.error.message);
+      setSuccess(editing ? "Galereya yangilandi." : "Galereyaga yuklandi.");
+      closeForm();
       await load();
     } catch (err) {
       setError(errorText(err, "Faylni yuklab bo'lmadi."));
@@ -1135,7 +1247,7 @@ function GallerySection() {
     <section>
       <SectionHeading
         title="Galereya"
-        text="Rasm va videolarni yuklang yoki o'chiring."
+        text="Rasm va videolarni yuklang, tavsifini tahrirlang yoki o'chiring."
         action={
           <button type="button" onClick={openCreate} className={goldBtn}>
             <Upload size={16} aria-hidden /> Media yuklash
@@ -1158,14 +1270,19 @@ function GallerySection() {
               <PublishBadge published={Boolean(row.is_published)} />
             </div>
             {row.description ? <p className="mt-2 line-clamp-2 text-sm text-slate-400">{row.description}</p> : null}
-            <button type="button" onClick={() => void remove(row)} className={`${dangerBtn} mt-4`}>
-              <Trash2 size={15} aria-hidden /> O'chirish
-            </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => openEdit(row)} className={ghostBtn}>
+                <Pencil size={15} aria-hidden /> Tahrirlash
+              </button>
+              <button type="button" onClick={() => void remove(row)} className={dangerBtn}>
+                <Trash2 size={15} aria-hidden /> O'chirish
+              </button>
+            </div>
           </article>
         ))}
       </div>
       {open ? (
-        <Modal title="Galereyaga yuklash" onClose={() => setOpen(false)}>
+        <Modal title={editing ? "Lavhani tahrirlash" : "Galereyaga yuklash"} onClose={closeForm}>
           <form onSubmit={(event) => void save(event)} className="space-y-4">
             <label className="block">
               <span className={labelClass}>Sarlavha</span>
@@ -1180,16 +1297,18 @@ function GallerySection() {
               accept="image/*,video/*"
               file={media.file}
               preview={media.preview}
-              currentUrl={null}
+              currentUrl={editing?.image_url ?? null}
               clearImage={media.clearImage}
+              remoteUrl={media.remoteUrl}
               video={Boolean(media.file?.type.startsWith("video/"))}
               onPick={media.pick}
               onClear={media.markClear}
+              onRemote={media.setRemoteUrl}
             />
             <PublishField checked={form.is_published} onChange={(is_published) => setForm({ ...form, is_published })} />
             <div className="flex flex-wrap gap-2 pt-2">
-              <button type="submit" disabled={saving} className={goldBtn}>{saving ? "Yuklanmoqda..." : "Yuklash"}</button>
-              <button type="button" onClick={() => setOpen(false)} className={ghostBtn}>Bekor qilish</button>
+              <button type="submit" disabled={saving} className={goldBtn}>{saving ? "Saqlanmoqda..." : editing ? "Saqlash" : "Yuklash"}</button>
+              <button type="button" onClick={closeForm} className={ghostBtn}>Bekor qilish</button>
             </div>
           </form>
         </Modal>
@@ -1451,7 +1570,7 @@ function TestsSection() {
       setQuestionsLoading(false);
       return;
     }
-    const optionsResult = await supabase.from("test_options").select("*").in("question_id", ids).order("created_at", { ascending: true });
+    const optionsResult = await supabase.from("test_options").select("id,question_id,option_text,is_correct").in("question_id", ids).order("id", { ascending: true });
     if (optionsResult.error) setError(optionsResult.error.message);
     else setOptions(rowsOf<OptionRow>(optionsResult.data));
     setQuestionsLoading(false);
@@ -1697,20 +1816,67 @@ function TestsSection() {
   );
 }
 
-function LogoutSection({ busy, error, onLogout }: { busy: boolean; error: string; onLogout: () => void }) {
+function ProfileSection({ email, busy, error, onLogout }: { email: string; busy: boolean; error: string; onLogout: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function savePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    if (password.length < 6) {
+      setMessage("Parol kamida 6 ta belgidan iborat bo'lsin.");
+      return;
+    }
+    if (password !== confirm) {
+      setMessage("Parollar bir xil emas.");
+      return;
+    }
+    setSaving(true);
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    setSaving(false);
+    if (updateError) {
+      setMessage(updateError.message);
+      return;
+    }
+    setPassword("");
+    setConfirm("");
+    setMessage("Parol yangilandi.");
+  }
+
   return (
-    <section className="mx-auto max-w-lg rounded-2xl border border-gold-500/20 bg-navy-900/80 p-6 sm:p-8">
-      <div className="grid h-12 w-12 place-items-center rounded-xl bg-gold-500 text-navy-950">
-        <LogOut size={22} aria-hidden />
+    <section className="mx-auto max-w-lg space-y-5">
+      <div className="rounded-2xl border border-gold-500/20 bg-navy-900/80 p-6 sm:p-8">
+        <div className="grid h-12 w-12 place-items-center rounded-xl bg-gold-500 text-navy-950">
+          <UserRound size={22} aria-hidden />
+        </div>
+        <h2 className="mt-4 font-serif text-3xl text-white">Profil</h2>
+        <p className="mt-3 text-sm text-slate-400">Kirgan hisob</p>
+        <p className="mt-1 break-all text-white">{email || "Email ko'rinmayapti"}</p>
       </div>
-      <h2 className="mt-4 font-serif text-3xl text-white">Hisobdan chiqish</h2>
-      <p className="mt-3 text-sm leading-6 text-slate-300">
-        Chiqish joriy admin sessiyasini tugatadi. Panelga qaytish uchun email va parol bilan qayta kirish kerak bo'ladi.
-      </p>
-      {error ? <p role="alert" className="mt-4 text-sm text-red-300">{error}</p> : null}
-      <button type="button" onClick={onLogout} disabled={busy} className={`${goldBtn} mt-6`}>
-        {busy ? "Chiqilmoqda..." : "Xavfsiz chiqish"}
-      </button>
+      <form onSubmit={(event) => void savePassword(event)} className={`${cardClass} space-y-4`}>
+        <h3 className="font-serif text-xl text-white">Parolni yangilash</h3>
+        <label className="block">
+          <span className={labelClass}>Yangi parol</span>
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" minLength={6} className={fieldClass} />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Parolni takrorlang</span>
+          <input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} autoComplete="new-password" minLength={6} className={fieldClass} />
+        </label>
+        {message ? <p role="status" className="text-sm text-gold-300">{message}</p> : null}
+        <button type="submit" disabled={saving} className={goldBtn}>{saving ? "Saqlanmoqda..." : "Parolni saqlash"}</button>
+      </form>
+      <div className="rounded-2xl border border-white/10 bg-navy-900/80 p-6">
+        <h3 className="font-serif text-xl text-white">Chiqish</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-400">Chiqish joriy admin sessiyasini tugatadi.</p>
+        {error ? <p role="alert" className="mt-3 text-sm text-red-300">{error}</p> : null}
+        <button type="button" onClick={onLogout} disabled={busy} className={`${goldBtn} mt-4`}>
+          <LogOut size={16} aria-hidden />
+          {busy ? "Chiqilmoqda..." : "Xavfsiz chiqish"}
+        </button>
+      </div>
     </section>
   );
 }
@@ -1720,7 +1886,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [email, setEmail] = useState("");
-  const [section, setSection] = useState<SectionId>("team");
+  const [section, setSection] = useState<SectionId>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -1743,10 +1909,12 @@ export default function AdminPage() {
         .single();
 
       if (error || data?.role !== "admin") {
+        await clearServerSession();
         router.replace("/");
         return;
       }
 
+      await syncServerSession();
       setIsAdmin(true);
       setLoading(false);
     }
@@ -1766,6 +1934,7 @@ export default function AdminPage() {
   async function handleLogout() {
     setSigningOut(true);
     setLogoutError("");
+    await clearServerSession();
     const { error } = await supabase.auth.signOut();
     if (error) {
       setLogoutError(error.message);
@@ -1830,13 +1999,14 @@ export default function AdminPage() {
           <p className="truncate font-medium text-white">{current.label}</p>
         </div>
         <div className="px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
+          {section === "dashboard" ? <DashboardSection onOpen={setSection} /> : null}
           {section === "team" ? <TeamSection /> : null}
           {section === "applications" ? <ApplicationsSection /> : null}
           {section === "events" ? <EventsSection /> : null}
           {section === "articles" ? <ArticlesSection /> : null}
           {section === "gallery" ? <GallerySection /> : null}
           {section === "tests" ? <TestsSection /> : null}
-          {section === "logout" ? <LogoutSection busy={signingOut} error={logoutError} onLogout={() => void handleLogout()} /> : null}
+          {section === "profile" ? <ProfileSection email={email} busy={signingOut} error={logoutError} onLogout={() => void handleLogout()} /> : null}
         </div>
       </div>
     </div>

@@ -11,12 +11,23 @@ import { site } from "@/data/site";
 const sans = Inter({ subsets: ["latin", "latin-ext"], variable: "--font-sans" });
 const serif = Playfair_Display({ subsets: ["latin", "latin-ext"], variable: "--font-serif" });
 
+const description = `${site.university} talabalarining huquqiy ta'lim klubi. ${site.tagline}`;
+
 export const metadata: Metadata = {
+  metadataBase: new URL(site.url),
   title: {
     default: `${site.name} — ${site.university}`,
     template: `%s | ${site.name}`,
   },
-  description: `${site.university} talabalarining huquqiy ta'lim klubi. ${site.tagline}`,
+  description,
+  openGraph: {
+    title: site.name,
+    description,
+    locale: "uz_UZ",
+    type: "website",
+    siteName: site.name,
+    url: site.url,
+  },
 };
 
 export default function RootLayout({

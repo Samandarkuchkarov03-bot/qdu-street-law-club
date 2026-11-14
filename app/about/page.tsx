@@ -4,7 +4,11 @@ import { PageHeader } from "@/components/PageHeader";
 import Reveal from "@/components/Reveal";
 import { site } from "@/data/site";
 
-export const metadata: Metadata = { title: "Klub haqida" };
+export const metadata: Metadata = {
+  title: "Klub haqida",
+  description: "QDU Street Law Club missiyasi, qarashi va qadriyatlari. Huquqni hamma uchun ochiq qilamiz.",
+  openGraph: { title: "Klub haqida", description: "Street Law — huquqni auditoriyadan ko'chaga olib chiqish." },
+};
 const values = [
   { icon: Target, title: "Missiya", text: "Huquqiy bilimni oddiy odamga yetkazish va huquqiy madaniyatni oshirish." },
   { icon: Eye, title: "Qarash", text: "Har bir inson o'z huquqlarini biladigan va ulardan oqilona foydalanadigan jamiyat." },

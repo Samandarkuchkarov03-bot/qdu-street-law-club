@@ -1,5 +1,6 @@
-export const PASSWORD_RECOVERY_REDIRECT_TO =
-  "https://qdu-street-law-club-8buc.vercel.app/auth/callback";
+import { site } from "@/data/site";
+
+export const PASSWORD_RECOVERY_REDIRECT_TO = `${site.url}/auth/callback`;
 
 const AUTH_ERROR_CODES = new Set([
   "otp_expired",

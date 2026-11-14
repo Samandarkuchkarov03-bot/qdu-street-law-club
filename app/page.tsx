@@ -6,8 +6,11 @@ import MemberCard from "@/components/MemberCard";
 import EventCard from "@/components/EventCard";
 import GalleryGrid from "@/components/GalleryGrid";
 import { SectionHead } from "@/components/PageHeader";
-import { getArticles, getFeaturedMembers, getGallery, getLatestEvents, getMembers, getQuizzes, getEvents } from "@/lib/repository";
+import { getArticles, getEvents, getFeaturedMembers, getGallery, getLatestEvents, getMembers, getQuizzes } from "@/lib/repository";
 import { site } from "@/data/site";
+
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const pillars = [
   { icon: BookOpen, title: "Huquqiy ta'lim", text: "Murakkab huquqiy mavzularni oddiy va tushunarli tilda tushuntiramiz." },
@@ -16,10 +19,20 @@ const pillars = [
 ];
 
 export default async function Home() {
-  const [featured, latest, gallery, all, events, articles, quizzes] = await Promise.all([getFeaturedMembers(), getLatestEvents(3), getGallery(), getMembers(), getEvents(), getArticles(), getQuizzes()]);
+  const [featured, latest, gallery, all, events, articles, quizzes] = await Promise.all([
+    getFeaturedMembers(),
+    getLatestEvents(3),
+    getGallery(),
+    getMembers(),
+    getEvents(),
+    getArticles(),
+    getQuizzes(),
+  ]);
   const stats = [
-    { label: "Jamoa a'zolari", value: all.length }, { label: "Tadbirlar", value: events.length },
-    { label: "Maqolalar", value: articles.length }, { label: "Interaktiv testlar", value: quizzes.length },
+    { label: "Jamoa a'zolari", value: all.length },
+    { label: "Tadbirlar", value: events.length },
+    { label: "Maqolalar", value: articles.length },
+    { label: "Interaktiv testlar", value: quizzes.length },
   ];
   return (
     <>
@@ -50,17 +63,17 @@ export default async function Home() {
         <dl className="container-x grid grid-cols-2 gap-x-4 gap-y-8 text-center min-[431px]:gap-8 md:grid-cols-4">
           {stats.map((s) => (<div key={s.label} className="min-w-0"><dd className="font-serif text-4xl text-gold-400 min-[431px]:text-5xl"><Counter to={s.value} /></dd><dt className="mt-2 text-sm text-slate-400">{s.label}</dt></div>))}
         </dl>
-        <p className="mt-6 text-center text-xs text-slate-600">Raqamlar saytdagi ma'lumotlardan avtomatik hisoblanadi.</p>
+        <p className="mt-6 text-center text-xs text-slate-600">Raqamlar nashr qilingan ma'lumotlardan hisoblanadi.</p>
       </section>
 
       <section className="container-x pt-16 min-[431px]:pt-24">
-        <SectionHead eyebrow="Jamoa" title="Tanlangan a'zolar" href="/team" />
-        <ul className="grid gap-5 md:grid-cols-3">{featured.map((m, i) => <li key={m.id}><Reveal delay={i * 100}><MemberCard m={m} /></Reveal></li>)}</ul>
+        <SectionHead eyebrow="Jamoa" title="Jamoa a'zolari" href="/team" />
+        {featured.length ? <ul className="grid gap-5 md:grid-cols-3">{featured.map((m, i) => <li key={m.id}><Reveal delay={i * 100}><MemberCard m={m} /></Reveal></li>)}</ul> : <p className="card p-10 text-center text-slate-400">Hali nashr qilingan a'zo yo'q.</p>}
       </section>
 
       <section className="container-x pt-16 min-[431px]:pt-24">
         <SectionHead eyebrow="Tadbirlar" title="So'nggi tadbirlar" href="/events" />
-        <ul className="grid gap-5 md:grid-cols-3">{latest.map((e, i) => <li key={e.id}><Reveal delay={i * 100} className="h-full"><EventCard e={e} /></Reveal></li>)}</ul>
+        {latest.length ? <ul className="grid gap-5 md:grid-cols-3">{latest.map((e, i) => <li key={e.id}><Reveal delay={i * 100} className="h-full"><EventCard e={e} /></Reveal></li>)}</ul> : <p className="card p-10 text-center text-slate-400">Hali e'lon qilingan tadbir yo'q.</p>}
       </section>
 
       <section className="container-x pt-16 min-[431px]:pt-24">

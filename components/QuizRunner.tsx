@@ -1,56 +1,160 @@
 "use client";
+
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, XCircle } from "lucide-react";
 import type { Quiz } from "@/types";
+import { gradeQuiz } from "@/lib/grade-quiz";
 
 export default function QuizRunner({ quizzes }: { quizzes: Quiz[] }) {
+  const [category, setCategory] = useState("");
   const [quiz, setQuiz] = useState<Quiz | null>(null);
-  const [i, setI] = useState(0);
-  const [pick, setPick] = useState<number | null>(null);
-  const [score, setScore] = useState(0);
-  const reset = () => { setQuiz(null); setI(0); setPick(null); setScore(0); };
+  const [index, setIndex] = useState(0);
+  const [picks, setPicks] = useState<Record<string, string>>({});
+  const [score, setScore] = useState<number | null>(null);
+  const [correctIds, setCorrectIds] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [grading, setGrading] = useState(false);
 
-  if (!quiz) return (
-    <ul className="grid gap-5 md:grid-cols-2">
-      {quizzes.map((z) => (
-        <li key={z.id}><button onClick={() => setQuiz(z)} className="card min-h-11 w-full p-5 text-left min-[431px]:p-6">
-          <h3 className="text-xl">{z.title}</h3><p className="mt-2 text-sm text-slate-400">{z.description}</p>
-          <p className="mt-4 text-sm font-semibold text-gold-400">{z.questions.length} ta savol · Boshlash →</p>
-        </button></li>
-      ))}
-    </ul>
-  );
+  const categories = Array.from(new Set(quizzes.map((item) => item.category).filter(Boolean)));
+  const visible = quizzes.filter((item) => !category || item.category === category);
 
-  const done = i >= quiz.questions.length;
-  if (done) return (
-    <div className="card mx-auto max-w-xl p-6 text-center min-[431px]:p-10">
-      <p className="eyebrow">Natija</p>
-      <p className="mt-3 font-serif text-6xl text-gold-400">{score}/{quiz.questions.length}</p>
-      <button onClick={reset} className="btn-gold mt-8"><RotateCcw size={16} aria-hidden />Boshqa test</button>
-    </div>
-  );
+  function openQuiz(next: Quiz) {
+    setQuiz(next);
+    setIndex(0);
+    setPicks({});
+    setScore(null);
+    setCorrectIds([]);
+    setError("");
+  }
 
-  const cur = quiz.questions[i];
+  function reset() {
+    setQuiz(null);
+    setIndex(0);
+    setPicks({});
+    setScore(null);
+    setCorrectIds([]);
+    setError("");
+  }
+
+  if (quizzes.length === 0) {
+    return <p className="card p-10 text-center text-slate-400">Hali nashr qilingan test yo'q.</p>;
+  }
+
+  if (!quiz) {
+    return (
+      <div>
+        {categories.length > 0 ? (
+          <div className="mb-6 flex flex-wrap gap-2">
+            <button type="button" onClick={() => setCategory("")} className={!category ? "btn-gold" : "btn-ghost"}>Barchasi</button>
+            {categories.map((item) => (
+              <button key={item} type="button" onClick={() => setCategory(item)} className={category === item ? "btn-gold" : "btn-ghost"}>{item}</button>
+            ))}
+          </div>
+        ) : null}
+        {visible.length === 0 ? <p className="card p-10 text-center">Bu kategoriyada test yo'q.</p> : null}
+        <ul className="grid gap-5 md:grid-cols-2">
+          {visible.map((item) => (
+            <li key={item.id}>
+              <button type="button" onClick={() => openQuiz(item)} className="card min-h-11 w-full p-5 text-left min-[431px]:p-6">
+                {item.category ? <p className="text-xs font-semibold uppercase tracking-wider text-gold-400">{item.category}</p> : null}
+                <h3 className="mt-2 text-xl">{item.title}</h3>
+                {item.description ? <p className="mt-2 text-sm text-slate-400">{item.description}</p> : null}
+                <p className="mt-4 text-sm font-semibold text-gold-400">{item.questions.length} ta savol · Boshlash</p>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  if (quiz.questions.length === 0) {
+    return (
+      <div className="card mx-auto max-w-xl p-8 text-center">
+        <p>Bu testda hali savol yo'q.</p>
+        <button type="button" onClick={reset} className="btn-gold mt-6">Testlar ro'yxati</button>
+      </div>
+    );
+  }
+
+  const finished = score !== null;
+  if (finished) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-5">
+        <div className="card p-6 text-center min-[431px]:p-10">
+          <p className="eyebrow">Natija</p>
+          <p className="mt-3 font-serif text-6xl text-gold-400">{score}/{quiz.questions.length}</p>
+          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+            <button type="button" onClick={() => openQuiz(quiz)} className="btn-gold"><RotateCcw size={16} aria-hidden />Qayta ishlash</button>
+            <button type="button" onClick={reset} className="btn-ghost">Boshqa test</button>
+          </div>
+        </div>
+        {quiz.questions.map((question, number) => (
+          <article key={question.id} className="card p-5">
+            <h3 className="text-lg">{number + 1}. {question.q}</h3>
+            <ul className="mt-4 space-y-2">
+              {question.options.map((option) => {
+                const picked = picks[question.id] === option.id;
+                const correct = correctIds.includes(option.id);
+                const tone = correct ? "border-emerald-400 bg-emerald-400/10" : picked ? "border-red-400 bg-red-400/10" : "border-white/10";
+                return (
+                  <li key={option.id} className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${tone}`}>
+                    <span>{option.text}</span>
+                    {correct ? <CheckCircle2 size={18} aria-label="To'g'ri javob" className="shrink-0 text-emerald-400" /> : null}
+                    {picked && !correct ? <XCircle size={18} aria-label="Sizning javobingiz" className="shrink-0 text-red-400" /> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </article>
+        ))}
+      </div>
+    );
+  }
+
+  const current = quiz.questions[index];
+  const selected = picks[current.id] ?? "";
+
+  async function finish(nextPicks: Record<string, string>) {
+    setGrading(true);
+    setError("");
+    const result = await gradeQuiz(quiz!.id, quiz!.questions.map((question) => ({ questionId: question.id, optionId: nextPicks[question.id] })));
+    setGrading(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setScore(result.score);
+    setCorrectIds(result.correctOptionIds);
+  }
+
   return (
     <div className="card mx-auto max-w-2xl p-6 sm:p-8">
-      <p className="text-sm text-slate-500">{quiz.title} · {i + 1}/{quiz.questions.length}</p>
-      <div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-gold-500 transition-all duration-500" style={{ width: `${(i / quiz.questions.length) * 100}%` }} /></div>
-      <h2 className="mt-6 text-xl min-[431px]:text-2xl">{cur.q}</h2>
+      <p className="text-sm text-slate-500">{quiz.title} · {index + 1}/{quiz.questions.length}</p>
+      <div className="mt-2 h-1.5 overflow-hidden rounded bg-white/10"><div className="h-full bg-gold-500 transition-all duration-500" style={{ width: `${(index / quiz.questions.length) * 100}%` }} /></div>
+      <h2 className="mt-6 text-xl min-[431px]:text-2xl">{current.q}</h2>
       <ul className="mt-6 space-y-3">
-        {cur.options.map((o, k) => {
-          const state = pick === null ? "border-white/15 hover:border-gold-400" : k === cur.answer ? "border-emerald-400 bg-emerald-400/10" : k === pick ? "border-red-400 bg-red-400/10" : "border-white/10 opacity-60";
-          return (<li key={o}><button disabled={pick !== null} onClick={() => { setPick(k); if (k === cur.answer) setScore(score + 1); }}
-            className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left transition ${state}`}>
-            <span className="min-w-0">{o}</span>{pick !== null && k === cur.answer && <CheckCircle2 size={18} aria-label="To'g'ri" className="shrink-0 text-emerald-400" />}{pick === k && k !== cur.answer && <XCircle size={18} aria-label="Noto'g'ri" className="shrink-0 text-red-400" />}
-          </button></li>);
-        })}
+        {current.options.map((option) => (
+          <li key={option.id}>
+            <button
+              type="button"
+              onClick={() => setPicks({ ...picks, [current.id]: option.id })}
+              className={`flex min-h-11 w-full items-center rounded-xl border px-4 py-3 text-left transition ${selected === option.id ? "border-gold-400 bg-gold-500/10" : "border-white/15 hover:border-gold-400"}`}
+            >
+              {option.text}
+            </button>
+          </li>
+        ))}
       </ul>
-      {pick !== null && (
-        <div aria-live="polite" className="mt-6">
-          <p className="text-sm text-slate-400">{cur.explain}</p>
-          <button onClick={() => { setI(i + 1); setPick(null); }} className="btn-gold mt-5">{i + 1 === quiz.questions.length ? "Natijani ko'rish" : "Keyingi savol"}</button>
-        </div>
-      )}
+      {error ? <p role="alert" className="mt-4 text-sm text-red-300">{error}</p> : null}
+      <div className="mt-6 flex flex-wrap gap-3">
+        {index > 0 ? <button type="button" onClick={() => setIndex(index - 1)} className="btn-ghost">Oldingi</button> : null}
+        {index + 1 < quiz.questions.length ? (
+          <button type="button" disabled={!selected} onClick={() => setIndex(index + 1)} className="btn-gold disabled:cursor-not-allowed disabled:opacity-50">Keyingi savol</button>
+        ) : (
+          <button type="button" disabled={!selected || grading} onClick={() => void finish(picks)} className="btn-gold disabled:cursor-not-allowed disabled:opacity-50">{grading ? "Hisoblanmoqda..." : "Natijani ko'rish"}</button>
+        )}
+      </div>
     </div>
   );
 }

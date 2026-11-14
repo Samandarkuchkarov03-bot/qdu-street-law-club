@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import { PageHeader } from "@/components/PageHeader";
 import ApplicationForm from "@/components/ApplicationForm";
 
-export const metadata: Metadata = { title: "A'zo bo'lish" };
+export const metadata: Metadata = {
+  title: "A'zo bo'lish",
+  description: "QDU Street Law Clubga a'zolik arizasini yuboring.",
+  openGraph: { title: "A'zo bo'lish", description: "Klubga a'zolik arizasi." },
+};
 
 export default function Join() {
   return (
