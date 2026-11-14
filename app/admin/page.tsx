@@ -186,19 +186,19 @@ function statusLabel(status: string | null): string {
   return "Kutilmoqda";
 }
 
+const MEDIA_BUCKET = "street-law-media";
+
 async function resolveBucket(): Promise<string> {
   const { data, error } = await supabase.storage.listBuckets();
-  if (error) throw new Error("Storage ro'yxatini olib bo'lmadi. Dashboardda public bucket yarating.");
-  const buckets = data ?? [];
-  const usable = buckets.filter((bucket) => bucket.public);
-  if (usable.length === 1) return usable[0].name;
-  if (buckets.length === 0) {
-    throw new Error("Supabase Storage'da public bucket yo'q. Dashboard → Storage bo'limida bitta public bucket yarating, keyin qayta urinib ko'ring.");
+  // listBuckets() often returns [] for a signed-in admin: reading storage.buckets
+  // is a separate permission from uploading. An empty list does not mean the bucket is missing.
+  if (error || !data?.length) return MEDIA_BUCKET;
+  const named = data.find((bucket) => bucket.id === MEDIA_BUCKET || bucket.name === MEDIA_BUCKET);
+  if (!named) return MEDIA_BUCKET;
+  if (named.public === false) {
+    throw new Error("street-law-media bucket topildi, lekin public emas. Dashboardda Public ni yoqing.");
   }
-  if (usable.length === 0) {
-    throw new Error("Storage bucketlar bor, lekin public emas. Rasmlar saytda ochilishi uchun bucket public bo'lishi kerak.");
-  }
-  throw new Error("Bir nechta public bucket topildi. Bittasini qoldiring yoki qolganlarini yoping.");
+  return named.name || MEDIA_BUCKET;
 }
 
 async function uploadToBucket(file: File, folder: string): Promise<string> {
@@ -406,7 +406,7 @@ function MediaFields({
         <span className="mb-1.5 block text-xs text-slate-400">Yoki tayyor https manzil</span>
         <input value={remoteUrl} onChange={(event) => onRemote(event.target.value)} placeholder="https://" className={fieldClass} />
       </label>
-      <p className="mt-2 text-xs text-slate-500">Fayl faqat Supabase'da mavjud bitta public bucket bo'lsa yuklanadi. Bucket yo'q bo'lsa, tayyor rasm manzilini kiriting.</p>
+      <p className="mt-2 text-xs text-slate-500">Fayl street-law-media public bucketiga yuklanadi va olingan public URL jadvalga saqlanadi.</p>
     </div>
   );
 }
