@@ -1,10 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { AuthError } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { clearServerSession, syncServerSession } from "@/lib/auth-session";
 import { site } from "@/data/site";
+
+function loginError(error: AuthError | null): string {
+  const code = error?.code ?? "";
+  const message = (error?.message ?? "").toLowerCase();
+  if (code === "invalid_credentials" || message.includes("invalid login")) return "Email yoki parol noto'g'ri.";
+  if (code === "email_not_confirmed" || message.includes("email not confirmed")) {
+    return "Email tasdiqlanmagan. Pochtangizdagi havolani oching yoki parolni tiklang.";
+  }
+  return "Kirish amalga oshmadi. Qayta urinib ko'ring.";
+}
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -14,17 +25,20 @@ export default function AdminLoginPage() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const busy = useRef(false);
 
   useEffect(() => {
     let active = true;
     async function resume() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!active || !user) return;
-      const { data } = await supabase.from("user_roles").select("role").eq("id", user.id).maybeSingle();
-      if (!active) return;
-      if (data?.role !== "admin") return;
-      const synced = await syncServerSession();
-      if (synced) router.replace("/admin");
+      if (busy.current) return;
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      const userId = session?.user?.id;
+      if (!active || busy.current || !session || !userId) return;
+      const { data: role } = await supabase.from("user_roles").select("role").eq("id", userId).maybeSingle();
+      if (!active || busy.current || role?.role !== "admin") return;
+      const synced = await syncServerSession(session);
+      if (synced && active && !busy.current) router.replace("/admin");
     }
     void resume();
     return () => {
@@ -34,14 +48,16 @@ export default function AdminLoginPage() {
 
   async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    busy.current = true;
     setError("");
     setNotice("");
     setLoading(true);
 
     const { data: signIn, error: signError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (signError || !signIn.user) {
-      setError("Email yoki parol noto'g'ri.");
+    if (signError || !signIn.session || !signIn.user) {
+      setError(loginError(signError));
       setLoading(false);
+      busy.current = false;
       return;
     }
 
@@ -51,14 +67,15 @@ export default function AdminLoginPage() {
       await clearServerSession();
       setError("Bu hisobda admin huquqi yo'q.");
       setLoading(false);
+      busy.current = false;
       return;
     }
 
-    const synced = await syncServerSession();
+    const synced = await syncServerSession(signIn.session);
     if (!synced) {
-      await supabase.auth.signOut();
       setError("Sessiya saqlanmadi. Qayta urinib ko'ring.");
       setLoading(false);
+      busy.current = false;
       return;
     }
 

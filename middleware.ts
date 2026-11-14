@@ -2,24 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { recoveryRedirectPath } from "@/lib/auth-redirect";
 import { getSupabaseEnv } from "@/lib/supabase-server";
-
-const ACCESS = "sb-access-token";
-const REFRESH = "sb-refresh-token";
-
-function cookieOptions(maxAge: number) {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const,
-    path: "/",
-    maxAge,
-  };
-}
+import { ACCESS_COOKIE, REFRESH_COOKIE, readTokenCookie, writeTokenCookie } from "@/lib/session-cookie";
 
 async function guardAdmin(request: NextRequest) {
   const loginUrl = new URL("/admin/login", request.url);
-  let access = request.cookies.get(ACCESS)?.value;
-  const refresh = request.cookies.get(REFRESH)?.value;
+  let access = readTokenCookie(request.cookies, ACCESS_COOKIE);
+  const refresh = readTokenCookie(request.cookies, REFRESH_COOKIE);
   if (!access && !refresh) return NextResponse.redirect(loginUrl);
 
   let env: { url: string; key: string };
@@ -46,8 +34,8 @@ async function guardAdmin(request: NextRequest) {
     if (data.session?.access_token && data.user) {
       access = data.session.access_token;
       userId = data.user.id;
-      response.cookies.set(ACCESS, data.session.access_token, cookieOptions(60 * 60));
-      response.cookies.set(REFRESH, data.session.refresh_token, cookieOptions(60 * 60 * 24 * 14));
+      writeTokenCookie(response, ACCESS_COOKIE, data.session.access_token, 60 * 60);
+      writeTokenCookie(response, REFRESH_COOKIE, data.session.refresh_token, 60 * 60 * 24 * 14);
     }
   }
 

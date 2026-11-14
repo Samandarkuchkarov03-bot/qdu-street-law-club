@@ -1,17 +1,19 @@
 "use client";
 
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
-export async function syncServerSession(): Promise<boolean> {
-  const { data } = await supabase.auth.getSession();
-  const session = data.session;
-  if (!session) return false;
+export async function syncServerSession(session?: Session | null): Promise<boolean> {
+  const current = session ?? (await supabase.auth.getSession()).data.session;
+  const accessToken = current?.access_token;
+  const refreshToken = current?.refresh_token;
+  if (!accessToken || !refreshToken) return false;
   const response = await fetch("/api/auth/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      access_token: session.access_token,
-      refresh_token: session.refresh_token,
+      access_token: accessToken,
+      refresh_token: refreshToken,
     }),
   });
   return response.ok;

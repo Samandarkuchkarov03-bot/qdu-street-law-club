@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { syncServerSession } from "@/lib/auth-session";
 import { clearRecoverySessionFlag, hasActiveRecoverySession, markRecoverySession, missingRecoveryMessage, readAuthCallback } from "@/lib/recovery";
 
 type Phase = "checking" | "ready" | "error" | "done";
@@ -84,12 +85,17 @@ export default function UpdatePasswordPage() {
       return;
     }
 
+    const synced = await syncServerSession();
+    if (!synced) {
+      setMessage("Parol yangilandi, lekin admin sessiyasi saqlanmadi. Login sahifasidan qayta kiring.");
+      setLoading(false);
+      return;
+    }
+
     clearRecoverySessionFlag();
     setPhase("done");
     setMessage("Parol muvaffaqiyatli yangilandi!");
-    window.setTimeout(() => {
-      router.replace("/admin");
-    }, 1500);
+    router.replace("/admin");
   }
 
   return (
